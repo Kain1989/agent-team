@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Agent Team">
+  <rect width="128" height="128" rx="26" fill="#1f1d1a"/>
+  <!-- two paired agents -->
+  <circle cx="44" cy="50" r="15" fill="none" stroke="#d4a15e" stroke-width="5"/>
+  <circle cx="84" cy="50" r="15" fill="none" stroke="#d4a15e" stroke-width="5"/>
+  <!-- pairing link -->
+  <line x1="59" y1="50" x2="69" y2="50" stroke="#8a8782" stroke-width="5" stroke-linecap="round"/>
+  <!-- the approval gate / check -->
+  <path d="M40 86 l16 16 l32 -34" fill="none" stroke="#7bbf6a" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

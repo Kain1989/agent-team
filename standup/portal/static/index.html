@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en" data-conn="boot">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="dark" />
+  <title>Mission Control — Team Status</title>
+  <!-- preload self-hosted fonts so the intended type identity paints fast -->
+  <link rel="preload" href="./fonts/InterTight-latin.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="preload" href="./fonts/JetBrainsMono-latin.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="stylesheet" href="./app.css" />
+</head>
+<body>
+  <!--
+    MISSION CONTROL — redesigned IA (verdict → hero → decisions → squads → staff → footer)
+    Renders the GET /api/status contract. Polls /api/status (~12s) + /api/heartbeat (~5s) + /api/team (×10).
+    Reads are GET-only. The Phase-2 ACTION buttons (Run standup / Trigger PM review) POST
+    to /api/actions/* behind a single-flight guard + a consequence-stating confirm dialog —
+    a launch is BLOCKED if a run is in-flight, the runner is busy, a tick is imminent, or a
+    dual runner is detected (the system's worst failure: double-fire). The hero's promoted
+    "Run standup now" shares that SAME controller + single-flight guard as the footer button.
+    Offline / stale / error -> shows last-known data + a "stale since" note, never a blank hang.
+  -->
+
+  <!-- Skip link for keyboard users -->
+  <a href="#main" class="skip-link">Skip to status</a>
+
+  <header class="topbar" role="banner">
+    <div class="topbar__brand">
+      <span class="brand-dot" aria-hidden="true"></span>
+      <span class="brand-name">MISSION&nbsp;CONTROL</span>
+      <span class="brand-sub">team status · live</span>
+    </div>
+
+    <div class="topbar__right">
+      <!-- Connection banner: distinguishes "team unhealthy" from "portal can't see the system" -->
+      <p id="conn-banner" class="conn-banner" role="status" aria-live="polite" hidden></p>
+      <!-- Degraded banner: backend served last-known data (a parse fell back). A
+           DATA-freshness warning, separate from the connection banner. The kind
+           (blind/warn/error) is set by JS from the actual warning severity — it is
+           NOT hardcoded here (that was the cry-wolf bug: a permanently-yellow banner). -->
+      <p id="degraded-banner" class="conn-banner" role="status" aria-live="polite" hidden></p>
+
+      <span class="freshness" aria-live="polite">
+        <span class="freshness__label">updated</span>
+        <span id="freshness-age" class="mono freshness__age">—</span>
+      </span>
+
+      <button id="refresh-btn" class="btn btn--ghost" type="button" aria-label="Refresh status now">
+        <span class="btn__icon" aria-hidden="true">↻</span>
+        <span class="btn__text">Refresh</span>
+      </button>
+    </div>
+  </header>
+
+  <main id="main" class="wrap" tabindex="-1">
+
+    <!-- ───────────── 1 · VERDICT STRIP (worst-signal-wins synthesis) ───────────── -->
+    <section id="verdict" class="verdict" data-level="steady" aria-labelledby="verdict-h" role="status" aria-live="polite">
+      <div class="verdict__main">
+        <p class="verdict__eyebrow" id="verdict-h">System verdict</p>
+        <p class="verdict__headline" id="verdict-headline">—</p>
+        <p class="verdict__move" id="verdict-move">—</p>
+        <!-- compact mono row carrying the full org counts (red/yellow/green/reported/worked/committed/prs) -->
+        <p class="verdict__counts mono" id="verdict-counts" aria-label="Org counts">—</p>
+      </div>
+      <ul class="verdict__chips" id="verdict-chips" aria-label="Key signals"><!-- JS fills 4 chips --></ul>
+    </section>
+
+    <!-- ───────────── 2 · HERO (exactly ONE element at display size) ───────────── -->
+    <!-- JS fills EITHER .hero-alarm (runner dead/stale + promoted Run-standup button)
+         OR .hero-decision (top dated-P0 decision when runner is alive). -->
+    <section id="hero" class="hero" data-mode="boot" aria-label="Primary focus">
+      <!-- filled by renderHero(d) -->
+    </section>
+
+    <!-- ───────────── 3 · DECISIONS BOARD (deduped · lane-grouped · re-sorted) ───────────── -->
+    <section id="board" class="board" aria-labelledby="board-h">
+      <div class="section-head">
+        <h2 id="board-h" class="section-head__title">Decisions</h2>
+        <p class="section-head__hint">deduped · sorted by severity, then what they unblock, then a bounded date nudge</p>
+      </div>
+      <div id="board-lanes">
+        <!-- JS: per-lane <div class="lane"><p class="lane__head">ACT NOW · N</p><ul class="lane__list">…rows…</ul></div> -->
+      </div>
+    </section>
+
+    <!-- ───────────── 4 · SQUADS (derived status; null health => neutral glyph) ───────────── -->
+    <section class="squads" aria-labelledby="squads-h">
+      <div class="section-head">
+        <h2 id="squads-h" class="section-head__title">Squads</h2>
+        <p class="section-head__hint">status DERIVED from task text · health unreported (◌) · next step behind disclosure</p>
+      </div>
+      <div class="squads__grid" id="squads-grid">
+        <!-- filled by JS -->
+      </div>
+
+      <!-- ───────────── 5 · STAFF ───────────── -->
+      <div class="staff" aria-labelledby="staff-h">
+        <h3 id="staff-h" class="staff__title">Staff — PM · design · comms</h3>
+        <ul class="staff__list" id="staff-list">
+          <!-- filled by JS: 2-up cards; comms_triage = 1 agent / 3 streams -->
+        </ul>
+
+        <!-- Bench: collapsed "N inactive" strip (id/role/folder), dimmed. -->
+        <div class="bench" id="bench" data-open="0" hidden>
+          <button type="button" class="bench__toggle" id="bench-toggle"
+                  aria-expanded="false" aria-controls="bench-list">
+            <span class="bench__caret" aria-hidden="true">▶</span>
+            <span id="bench-label">Bench (inactive)</span>
+          </button>
+          <ul class="bench__list" id="bench-list">
+            <!-- filled by JS -->
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ───────────── 6 · SYSTEM FOOTER ROW (demoted machinery) ───────────── -->
+    <section class="footer-row" aria-label="System actions and tick history">
+
+      <article class="actions" id="actions-card" aria-labelledby="actions-h">
+        <h2 id="actions-h" class="section-head__title">Actions</h2>
+
+        <!-- Dual-runner override: full-width red banner; ALL launches disabled
+             while it shows (incl. the hero-promoted Run-standup). Hidden unless the
+             backend reports runner.dual_runner. -->
+        <p id="dual-runner-banner" class="dual-banner" role="alert" hidden></p>
+
+        <!-- Per-button blocked reason (single-flight): why the buttons are locked
+             RIGHT NOW. aria-live so AT hears the lockout/unlock. -->
+        <p id="actions-lock" class="actions__lock" role="status" aria-live="polite" hidden></p>
+
+        <div class="actions__buttons">
+          <button id="act-run-standup" class="btn btn--action" type="button"
+                  data-action="run-standup" aria-haspopup="dialog">
+            <span class="btn__glyph" aria-hidden="true">▶</span>
+            <span class="btn__label">Run standup now</span>
+          </button>
+          <button id="act-pm-review" class="btn btn--action" type="button"
+                  data-action="pm-review" aria-haspopup="dialog">
+            <span class="btn__glyph" aria-hidden="true">▶</span>
+            <span class="btn__label">Trigger PM review</span>
+          </button>
+        </div>
+
+        <!-- Idle context line: last ran + next tick. Filled by JS. -->
+        <p class="actions__sub" id="actions-context">These drop a request the runner drains. Off-cadence — the next scheduled tick still runs.</p>
+
+        <!-- LIVE action panel: appears in LAUNCHING / RUNNING / DONE / ERROR.
+             aria-live=polite so the running state is announced (not a lying spinner). -->
+        <div id="action-live" class="action-live" role="status" aria-live="polite" hidden>
+          <div class="action-live__head">
+            <span class="action-live__dot" id="action-live-dot" aria-hidden="true"></span>
+            <span class="action-live__title" id="action-live-title">—</span>
+          </div>
+          <p class="action-live__detail" id="action-live-detail"></p>
+          <div class="action-live__result" id="action-live-result" hidden></div>
+          <div class="action-live__foot">
+            <a id="action-live-log" class="action-live__log" hidden>view log entry →</a>
+            <button id="action-live-retry" class="btn btn--mini" type="button" hidden>Retry</button>
+            <button id="action-live-dismiss" class="btn btn--mini btn--ghost" type="button" hidden>Dismiss</button>
+          </div>
+        </div>
+      </article>
+
+      <!-- Last-tick one-liner + landing-queue chip — demoted from cards to a terse column. -->
+      <article class="sysmeta" aria-labelledby="sysmeta-h">
+        <h2 id="sysmeta-h" class="section-head__title">System</h2>
+        <p class="sysmeta__lasttick mono" id="lasttick-line">—</p>
+
+        <div class="landing-chip" id="landing-chip" data-open="0">
+          <button type="button" class="landing-chip__toggle" id="landing-toggle"
+                  aria-expanded="false" aria-controls="landing-list">
+            <span class="landing-chip__caret" aria-hidden="true">▶</span>
+            <span class="landing-chip__label mono" id="landing-label">— unpushed</span>
+          </button>
+          <ul class="landing__list" id="landing-list">
+            <!-- filled by JS (deduped commits with ×N multipliers) -->
+          </ul>
+        </div>
+      </article>
+    </section>
+
+    <!-- ───────────── 7 · OPERATE (assign / trigger / direct — read-only job types) ─────────────
+         The human-facing controls that ENQUEUE a board job via POST /api/jobs. A job
+         is lighter than a standup run (read-only: review / directive / analysis), so it
+         submits inline with clear feedback rather than the heavy confirm dialog — but it
+         still states what it does and reports honestly (queued → running → done) in the
+         Jobs feed below. Target picker + per-squad quick reviews are populated from
+         /api/team; the live feed is GET /api/jobs polled ~4s. -->
+    <section class="operate" id="operate" aria-labelledby="operate-h">
+      <div class="section-head">
+        <h2 id="operate-h" class="section-head__title">Operate</h2>
+        <p class="section-head__hint">assign a code task (gated · awaits your approval) · trigger a review · send a directive — landed in the feed below</p>
+      </div>
+
+      <form class="operate__form" id="operate-form" novalidate>
+        <div class="operate__row">
+          <div class="field">
+            <label class="field__label" for="op-target">Target</label>
+            <select class="field__control mono" id="op-target" name="target">
+              <!-- filled by JS from /api/team: Broadcast · Squads · Devs · Staff · Projects -->
+              <option value="broadcast">Broadcast — the whole team</option>
+            </select>
+          </div>
+          <div class="field">
+            <label class="field__label" for="op-type">Action</label>
+            <select class="field__control" id="op-type" name="type">
+              <option value="assign-task">Assign code task — gated, awaits your approval</option>
+              <option value="trigger-review:pm">Trigger PM review</option>
+              <option value="trigger-review:ux">Trigger UX / design review</option>
+              <option value="send-directive">Send directive</option>
+              <option value="assign-analysis-task">Assign analysis task</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field">
+          <label class="field__label" for="op-prompt">
+            <span id="op-prompt-label">Message</span>
+          </label>
+          <textarea class="field__control field__control--area" id="op-prompt" name="prompt"
+                    rows="3" placeholder="What should the agent focus on?"></textarea>
+        </div>
+
+        <div class="operate__foot">
+          <p class="operate__cost" id="op-cost" aria-live="polite">
+            Read-only · the agent inspects + reports. No edits, commits, or deploys.
+          </p>
+          <button class="btn btn--action operate__submit" id="op-submit" type="submit">
+            <span class="btn__glyph" aria-hidden="true">▸</span>
+            <span class="btn__label" id="op-submit-label">Assign job</span>
+          </button>
+        </div>
+
+        <!-- inline submit feedback (accepted / rejected). aria-live so AT hears it. -->
+        <p class="operate__ack" id="op-ack" role="status" aria-live="polite" hidden></p>
+      </form>
+    </section>
+
+    <!-- ───────────── 7.5 · AWAITING YOUR APPROVAL (the HITL inbox) ─────────────
+         A code task ran GATED in an isolated worktree and STOPPED at a diff — nothing
+         committed. It waits HERE for the human: review the diff, then Approve (the
+         worker commits to the job branch) or Reject (the worktree is discarded). This
+         is "Code waits for you — nothing commits from a button" made live. Rendered
+         only when non-empty (it is the thing demanding attention); fed by
+         GET /api/jobs?status=awaiting_approval,committing. -->
+    <section class="approvals" id="approvals" aria-labelledby="approvals-h" hidden>
+      <div class="section-head">
+        <h2 id="approvals-h" class="section-head__title">Awaiting your approval</h2>
+        <p class="section-head__hint" id="approvals-hint">code tasks paused at a diff — nothing commits until you approve</p>
+      </div>
+      <!-- visually-hidden live region: announces approve/commit/reject to AT. -->
+      <p class="visually-hidden" id="approvals-live" role="status" aria-live="polite"></p>
+      <ul class="approvals__list" id="approvals-list" aria-label="Code tasks awaiting approval">
+        <!-- filled by JS: one approval card per awaiting_approval/committing code task -->
+      </ul>
+    </section>
+
+    <!-- ───────────── 8 · JOBS FEED (live: GET /api/jobs polled ~4s) ─────────────
+         Newest-first cards: type · target label · status badge (shape+word, not
+         color-alone) · age · expandable result summary on done · cancel for
+         queued/running. Empty state when no jobs; a quiet hint if the worker is
+         disabled (jobs stay queued forever). aria-live announces done/failed. -->
+    <section class="jobs" id="jobs" aria-labelledby="jobs-h">
+      <div class="section-head">
+        <h2 id="jobs-h" class="section-head__title">Jobs</h2>
+        <p class="section-head__hint" id="jobs-hint">live job feed · newest first · refreshes every few seconds</p>
+      </div>
+
+      <!-- quiet hint when the worker looks disabled (everything stuck queued). -->
+      <p class="jobs__worker-hint" id="jobs-worker-hint" role="status" hidden></p>
+
+      <!-- visually-hidden live region: announces a job reaching done/failed to AT. -->
+      <p class="visually-hidden" id="jobs-live" role="status" aria-live="polite"></p>
+
+      <ul class="jobs__list" id="jobs-list" aria-label="Recent jobs">
+        <!-- filled by JS; empty state injected when there are no jobs -->
+      </ul>
+    </section>
+
+  </main>
+
+  <footer class="pagefoot" role="contentinfo">
+    <span>Mission Control. Actions drop a request the runner drains. Data via <span class="mono">GET /api/status</span> + <span class="mono">GET /api/heartbeat</span>.</span>
+    <span id="conn-foot" class="mono">—</span>
+  </footer>
+
+  <!-- ───────────── ACTION DIALOG (CONFIRM | BLOCKED) ─────────────
+       One focus-trapped, Esc-closable dialog reused for both the consequence-
+       stating CONFIRM and the honest BLOCKED (double-fire) variant. Hidden until
+       JS opens it; the backdrop + role=dialog + aria-modal make it a true modal. -->
+  <div id="action-dialog-backdrop" class="dialog-backdrop" hidden>
+    <div id="action-dialog" class="dialog" role="dialog" aria-modal="true"
+         aria-labelledby="dialog-title" aria-describedby="dialog-body" tabindex="-1">
+      <div class="dialog__head">
+        <span class="dialog__kicker" id="dialog-kicker" aria-hidden="true">CONFIRM</span>
+        <h2 class="dialog__title" id="dialog-title">—</h2>
+      </div>
+      <div class="dialog__body" id="dialog-body">
+        <!-- filled by JS: consequence statement OR block reason -->
+      </div>
+      <div class="dialog__actions">
+        <button id="dialog-cancel" class="btn btn--dialog btn--ghost" type="button">Cancel</button>
+        <button id="dialog-confirm" class="btn btn--dialog btn--danger" type="button">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="./app.js" defer></script>
+</body>
+</html>

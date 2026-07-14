@@ -1,0 +1,9 @@
+{
+  "_comment": "TEMPLATE for the CODE-TASK job gate (Slice 2). setup.sh generates the real control/job_code_gate.json from this file, substituting __PYTHON__ (an absolute python3 — the hook is stdlib-only) and __CONTROL_DIR__ (this install's control/ dir). DENY-BY-DEFAULT allow-list + WORKTREE-SCOPED I/O hook fires for EVERY tool (matcher '*' catch-all; explicit 'mcp__.*' for namespaced MCP tools). The hook (job_code_gate_hook.py) allows ONLY worktree-scoped Read/Grep/Glob/LS/Edit/Write/MultiEdit and denies everything else (Bash, Task/Agent, WebFetch, WebSearch, NotebookEdit, all mcp__*). Reads AND writes are confined to STANDUP_CODE_WORKTREE so the agent cannot exfiltrate host secrets into the committed diff. The hook is the last-line machine boundary if any flag is weakened.",
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "*",       "hooks": [ { "type": "command", "command": "__PYTHON__ __CONTROL_DIR__/job_code_gate_hook.py" } ] },
+      { "matcher": "mcp__.*", "hooks": [ { "type": "command", "command": "__PYTHON__ __CONTROL_DIR__/job_code_gate_hook.py" } ] }
+    ]
+  }
+}

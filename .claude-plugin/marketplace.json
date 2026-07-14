@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-marketplace.json",
+  "name": "agent-team-marketplace",
+  "owner": {
+    "name": "Kain1989",
+    "url": "https://github.com/Kain1989"
+  },
+  "description": "The Agent Team plugin marketplace \u2014 run and manage a paired-squad AI engineering team (gated SDLC, Mission Control portal, roster + scheduling commands) from Claude Code.",
+  "plugins": [
+    {
+      "name": "agent-team",
+      "source": "./",
+      "description": "A gated-SDLC paired-squad team, a Mission Control portal, roster + scheduling commands, and a human approval gate \u2014 run and manage an AI engineering team from Claude Code.",
+      "version": "0.3.2"
+    }
+  ]
+}

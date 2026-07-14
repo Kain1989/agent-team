@@ -1,0 +1,4 @@
+{
+  "_comment": "Empty MCP server set for READ-ONLY job subprocesses. Passed via `--mcp-config <this> --strict-mcp-config` so the job IGNORES all ambient MCP configurations (~/.claude.json, <workspace>/.mcp.json, project .mcp.json) — none of the Snowflake / Slack / Atlassian servers load. A read-only reviewer holds NO warehouse/Slack/Jira handle; combined with the env-strip in agent_run.run_readonly, even a leaked credential path cannot authenticate.",
+  "mcpServers": {}
+}

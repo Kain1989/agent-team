@@ -1,0 +1,8 @@
+# Progress files are NEVER staged into task commits (team.json persistence rule).
+.standup/
+
+# Python / tooling cruft
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/

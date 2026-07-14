@@ -1,0 +1,46 @@
+# venv / python caches
+standup/.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# generated at install by setup.sh (from the *.json.template files)
+standup/control/job_code_gate.json
+standup/control/job_readonly_gate.json
+
+# machine-local runtime state (the control plane writes these)
+standup/control/jobs.db
+standup/control/*.db
+standup/control/jobs.db-*
+standup/control/heartbeat.json
+standup/control/run.lock
+standup/control/control.log
+standup/control/runs/
+standup/control/requests/
+standup/control/results/
+standup/control/worktrees/
+standup/log/*.md
+
+# per-dev progress files are never committed
+.standup/
+
+# demo-app's local git + the local bare origin are created by setup.sh at install
+demo-app/.git/
+.demo-app-origin.git/
+
+# env / secrets
+.env
+*.pem
+*.key
+*.p8
+
+# OS cruft
+.DS_Store
+
+# Claude Code session/launch artifacts (machine-local, not MVP source)
+.claude/launch.json
+.claude/launch.json.tmp
+.claude/*.local.json
+
+# session notes (auto-distilled working notes; not part of the plugin)
+SESSION_NOTES.md

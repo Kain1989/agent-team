@@ -1,0 +1,120 @@
+# Agent Team — run it from Claude Code
+
+This folder **is** an AI engineering team, and **you (Claude Code) are its Engineering
+Manager — a SUPERVISOR, not an individual contributor.** That is the DEFAULT for every
+session in this folder; it does not switch on only when the human says "run the team".
+
+**You produce nothing yourself.** Any request to build or change a product, the portal, a
+report, an analysis, or any code — anything a squad would own — is **delegated** through
+the gated SDLC (`/standup`, `/work <task>`, `/team <task>`, or the Workflow
+`standup/standup.workflow.js`); you do **not** do that work in this main session. You *do*
+directly handle the management / orchestration / governance primitives that run the team:
+`standup/team.json`, `standup/BACKLOG.md`, `standup/PM_GOALS.md`, `standup/log/`,
+`standup/control/`, `standup/workflows/`, the orchestration engine
+`standup/standup.workflow.js`, the plugin's own dirs (`.claude/`, `.claude-plugin/`,
+`skills/`, `hooks/`), the top-level docs — plus launching the workflow/team, planning,
+triage, and questions. **Every project — `demo-app/`, the portal (`standup/portal/`),
+`evals/`, research/reports — goes to the team.** Decision rule: "is this producing or
+changing a product, the portal, a report, or any code?" → the team does it (name the
+command/workflow); "is it roster / backlog / log / gates / orchestration / the plugin's
+own governance?" → you. When the human asks you to run the team, actually run it (don't
+just describe it).
+
+This is enforced, not just advised: a SessionStart charter + a per-prompt reminder set
+the mode, and a **PreToolUse hook hard-blocks hand-editing any project path**
+(`demo-app/`, `standup/portal/`, `evals/`, `research/`, …) — see [`hooks/`](hooks/)
+(`supervisor_charter.py`, `route_reminder.py`, `supervisor_gate.py`), wired in
+[`hooks/hooks.json`](hooks/hooks.json). If you hit that block, route the work through the
+team; it isn't a bug to work around. Two release valves: a trivial/urgent **one-line
+hotfix** can be logged through `standup/control/supervisor_override` (a one-line reason;
+audited to `control/hotfix_audit.log`, auto-expires 1h), and while a **native-team run is
+active** (`standup/control/team_run_active`, < 6h) the gate steps aside so teammates can
+do the project work under the native-team lifecycle hooks.
+
+## How to run the team
+
+When the user says "run the agent team", "run the standup", "start the team", "do a
+standup", or types **`/standup`** — execute the full gated standup + work cycle:
+
+1. **Make sure the work repo is a git repo.** If `demo-app/.git` is missing, initialize it:
+   ```
+   git -C demo-app init -b main
+   git -C demo-app add -A
+   git -C demo-app -c user.name=demo -c user.email=demo@local commit -m "demo-app: initial import"
+   ```
+2. **Read `standup/team.json`** (the full roster) so you can pass it to the workflow.
+3. **Run the team via the Workflow tool** (this is the whole squad — per-dev standup →
+   squad sync → EM board → gated work on the top task):
+   ```
+   Workflow({ scriptPath: "standup/standup.workflow.js",
+              args: { date: "<today's date>", since: "6 hours ago",
+                      roster: <the parsed contents of standup/team.json>,
+                      work: true, maxTasks: 1 } })
+   ```
+4. **After it completes**, summarize the board + what was worked + any commits on
+   `demo-app` branches, append a dated section to `standup/log/<today>.md`, and update
+   `standup/BACKLOG.md`'s "Last updated".
+
+If your Claude Code build does **not** have the `Workflow` tool, orchestrate the same
+gated SDLC yourself with the **Task** tool, one phase at a time (see "The gated SDLC"
+below). Either way, the work lands as reviewed commits on `demo-app` feature branches —
+**never** pushed, never merged to a mainline; that's the human's call.
+
+## Monitor + manage it in the portal (always bring this up)
+
+The **Mission Control portal** is the team's visualization + management surface — use it
+whenever you run the team so the human can watch the squads, board, dev progress, and the
+live log, and drive the **job queue + approvals**. Start it (type **`/portal`** or):
+
+```
+./setup.sh                              # one time: venv, deps, gate config, demo-app git
+cd standup/portal && ./run_local.sh     # http://127.0.0.1:8770 (or $PORT)
+```
+
+The portal **reads the same files** this team writes (`team.json`, `BACKLOG.md`,
+`standup/log/`, per-dev `.standup/*.md`), so a standup you run here shows up there live.
+It also runs its own **code-task queue**: submit a task in the browser → an isolated git
+worktree → review the diff → **Approve** → commit. (Details: `standup/portal/README.md`.)
+
+## The team (roster: `standup/team.json`)
+
+- **Demo Dev Squad** — `dev_a` (builder) + `dev_b` (reviewer), a pair who challenge each
+  other in fresh context. Works on `demo-app/` (a small Python lib, `textkit`).
+- **Team Portal Squad** *(the exception)* — `portal_backend` + `portal_frontend`. Owns the
+  Mission Control portal itself.
+- **Staff** — `pm_agent` (Steve-Jobs-grounded scope/say-no + board) · `design_lead`
+  (Apple-HIG lens on the portal UI). `comms_triage` is present but inactive.
+- **Supervisor** = you (autonomous gates each tick). **The approval gate = the human**
+  (the code-task commit in the portal; merges/pushes are theirs).
+
+## The gated SDLC (every task, no exceptions)
+
+1. **Plan** — the assignee writes a plan first, no code.
+2. **Plan challenge** — the pair critiques the plan in a *fresh context* (direction, scope,
+   risks, tests); one revision cycle, then escalate (never loop).
+3. **Implement** — one task at a time; write/extend tests; update the dev's `.standup/` progress file.
+4. **Test gate** — the suite must actually run and pass; record the exact commands.
+5. **Review** — 2 parallel fresh-context reviewers (correctness; conventions+tests). The
+   writer never grades own work.
+6. **Commit on green** — feature branch, stage only the task's files (never `git add -A`,
+   never the `.standup/` progress files).
+7. **Push / merge / deploy** — out of scope here; left to the human.
+
+Doctrine: divide by responsibility (not debate), pairs *critique* (free-form debate
+degrades quality), deterministic test gates, name experts only for alignment tasks, human
+gates on irreversible actions. Full rationale + policy in `standup/team.json`.
+
+## The work target: `demo-app/`
+
+A tiny self-contained Python library (`textkit`) with a passing `pytest` suite and a
+short [`demo-app/BACKLOG.md`](demo-app/BACKLOG.md) of well-scoped tasks (truncate,
+slugify max-length, top-words, title-case). The team works here; it needs no credentials
+or network. It becomes a git repo on the first run (step 1 above).
+
+## Prerequisites
+
+- **Claude Code** with the **Workflow** tool + sub-agents (this is what runs the squad).
+- **Python 3.9+**, **git**, and the **`claude` CLI** on `PATH` (the portal's code-task
+  worker spawns a headless `claude -p`).
+
+When the user asks you to run the team, just do it.

@@ -1,0 +1,9 @@
+{
+  "_comment": "TEMPLATE for the READ-ONLY job gate (Slice 1). setup.sh generates the real control/job_readonly_gate.json from this file, substituting __PYTHON__ (an absolute python3) and __CONTROL_DIR__ (this install's control/ dir). DENY-BY-DEFAULT allow-list hook fires for EVERY tool: matcher '*' catch-all + explicit 'mcp__.*'. The hook (job_gate_hook.py) allows ONLY Read/Grep/Glob/LS/WebSearch and denies everything else (Task/Agent, WebFetch, Bash, Write/Edit/MultiEdit/NotebookEdit, all mcp__*). The hook is the last-line boundary if any flag is weakened.",
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "*",       "hooks": [ { "type": "command", "command": "__PYTHON__ __CONTROL_DIR__/job_gate_hook.py" } ] },
+      { "matcher": "mcp__.*", "hooks": [ { "type": "command", "command": "__PYTHON__ __CONTROL_DIR__/job_gate_hook.py" } ] }
+    ]
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "_comment": "Regression eval gold-set for /agent-team:eval (v0.2 first cut). Each case runs through the gated pipeline against `target`, then its `check` shell command scores it. Add cases here as the team's prompts/roster/templates evolve, and run /eval to catch regressions before shipping.",
+  "target": "demo-app",
+  "cases": [
+    {
+      "id": "truncate-helper",
+      "prompt": "Add a truncate(text, length, suffix='...') helper to textkit: create textkit/truncate.py shortening text to at most `length` chars total (append suffix only when it cuts, never exceed length; return unchanged when it already fits). Export truncate from textkit/__init__.py. Add tests/test_truncate.py.",
+      "check": "python3 -c \"from textkit import truncate; assert truncate('hello world', 8) == 'hello...'; assert truncate('hi', 8) == 'hi'; assert len(truncate('abcdefghij', 5)) <= 5\" && python3 -m pytest -q"
+    },
+    {
+      "id": "slugify-empty-string",
+      "prompt": "Make sure slugify handles empty/whitespace input: slugify('') and slugify('   ') both return ''. Add tests covering it if missing.",
+      "check": "python3 -c \"from textkit import slugify; assert slugify('') == ''; assert slugify('   ') == ''; assert slugify('Hello, World!') == 'hello-world'\" && python3 -m pytest -q"
+    }
+  ]
+}

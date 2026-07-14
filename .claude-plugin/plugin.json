@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "agent-team",
+  "displayName": "Agent Team",
+  "version": "0.3.2",
+  "description": "Run and manage a paired-squad AI engineering team from Claude Code: a gated SDLC (plan -> challenge -> implement -> test -> review -> commit), a local Mission Control portal, roster management, recurring standups, and a human approval gate.",
+  "author": {
+    "name": "Kain",
+    "url": "https://github.com/Kain1989"
+  },
+  "homepage": "https://github.com/Kain1989/agent-team",
+  "repository": "https://github.com/Kain1989/agent-team",
+  "license": "MIT",
+  "keywords": [
+    "agents",
+    "multi-agent",
+    "team",
+    "standup",
+    "sdlc",
+    "orchestration",
+    "workflow"
+  ],
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json"
+}
