@@ -162,6 +162,21 @@ const WORK_SCHEMA = {
 
 const REVIEW_SCHEMA = { type: 'object', required: ['pass', 'verdict'], properties: { pass: { type: 'boolean' }, verdict: { type: 'string' } } }
 
+const DQ_SCHEMA = {
+  type: 'object', required: ['ran', 'passed', 'evidence'],
+  properties: {
+    ran: { type: 'boolean' }, passed: { type: 'boolean' },
+    evidence: { type: 'string', description: 'EXACT commands run + their results (the unit/dev test gate)' },
+    integration: { type: 'string', description: 'integration-test result if the project has a suite, else "none"' },
+    visual: { type: 'string', description: 'live visual/E2E result for a UI task (real running instance, not HTTP 200s), else "n/a"' },
+  },
+}
+
+const SUP_SCHEMA = {
+  type: 'object', required: ['approve', 'note'],
+  properties: { approve: { type: 'boolean' }, note: { type: 'string' }, must_fix: { type: 'array', items: { type: 'string' } } },
+}
+
 const progressFile = dev => `${dev.folder}/.standup/${dev.id}.md`
 
 // ---- Phase 0: COMMS (optional staff triage over a local inbox) ----
@@ -352,31 +367,67 @@ Follow the folder's conventions.`,
     record.impl = impl
     if (!impl) { record.status = 'blocked'; worked.push(record); continue }
 
-    // -- 4 REVIEW: two fresh-context lenses (writer never grades own work) --
-    const reviews = (await parallel(['correctness', 'conventions-and-tests'].map(lens => () =>
-      agent(
-        `Fresh-context adversarial review, ${lens} lens. You see only the diff and criteria — not the writer's reasoning. Find defects that AFFECT CORRECTNESS or violate conventions/test requirements; do not pad with non-blocking nits as blockers.
-FOLDER: ${folder}\nTASK: ${t.task}\nAPPROVED PLAN: ${JSON.stringify(plan)}\nIMPLEMENTATION REPORT: ${JSON.stringify(impl)}
-Read the ACTUAL working-tree diff (git -C ${folder} diff -- . ; plus untracked files listed in the report). VERIFY the test gate: were the claimed test commands really runnable, do results support tests_passed? pass=false if tests didn't actually run/pass or any blocking defect exists.`,
-        { label: `review:${dev.id}:${lens}`, phase: 'Work', schema: REVIEW_SCHEMA }
-      )))).filter(Boolean)
+    // -- 3.5 TEST GATE (deterministic: unit ALWAYS; integration if a suite exists; visual/E2E if UI; supervisor verifies HONESTY, not just the verdict) --
+    const dq = await agent(
+      `You are "${dev.id}" (${dev.role}). TEST GATE for the change you just made in ${folder}. RUN the checks and record the EXACT commands + results — never claim untested work passes (ran=false / passed=false if you could not run them).
+- unit/dev tests (ALWAYS): ${dev.tests || 'the project test suite'} — put the commands + results in evidence.
+- integration: run the project's integration suite IF it has one; else integration="none".
+- visual/E2E: IF this task changed UI, verify it LIVE the way a human user would (drive the real running instance / Playwright / a headless screenshot you actually read — NOT an HTTP 200) and put that proof in visual; else visual="n/a".`,
+      { label: `testgate:${dev.id}`, phase: 'Work', schema: DQ_SCHEMA }
+    )
+    const dqOk = await agent(
+      `You are the autonomous SUPERVISOR. Verify the TEST GATE's HONESTY, not just its verdict. Report: ${JSON.stringify(dq)}. approve=false if the commands weren't actually runnable, the evidence doesn't support passed, integration/visual was claimed without real proof, or a UI change reports visual="n/a".`,
+      { label: `sup:testgate:${dev.id}`, phase: 'Work', schema: SUP_SCHEMA }
+    )
+    record.testgate = { dq, supervisor: dqOk }
+    if (!(dq && dq.ran && dq.passed && dqOk && dqOk.approve)) { record.status = 'test-gate-failed'; worked.push(record); continue }
+
+    // -- 4 REVIEW: pair-review of the DIFF + two fresh-context lenses (writer never grades own work) --
+    const reviews = (await parallel([
+      // pair review of the actual DIFF — the lanemate who challenged the plan now reviews the real change
+      () => agent(
+        `You are "${lanemate.id}" (${lanemate.role}), the PAIR of "${dev.id}". You challenged the PLAN earlier; now review the ACTUAL DIFF — did the implementation do what the approved plan said, without regressions or scope creep?
+FOLDER: ${folder}\nTASK: ${t.task}\nAPPROVED PLAN: ${JSON.stringify(plan)}\nTEST GATE: ${JSON.stringify(dq)}
+Read the real working-tree diff (git -C ${folder} diff -- . ; plus untracked files in the report). pass=false if it diverges from the plan, regresses, or a blocking defect exists.`,
+        { label: `pair-review:${lanemate.id}`, phase: 'Work', schema: REVIEW_SCHEMA }
+      ),
+      // two fresh-context lenses — only the diff + criteria, no prior context
+      ...['correctness', 'conventions-and-tests'].map(lens => () =>
+        agent(
+          `Fresh-context adversarial review, ${lens} lens. You see only the diff and criteria — not the writer's reasoning. Find defects that AFFECT CORRECTNESS or violate conventions/test requirements; do not pad with non-blocking nits as blockers.
+FOLDER: ${folder}\nTASK: ${t.task}\nAPPROVED PLAN: ${JSON.stringify(plan)}\nIMPLEMENTATION REPORT: ${JSON.stringify(impl)}\nTEST GATE: ${JSON.stringify(dq)}
+Read the ACTUAL working-tree diff (git -C ${folder} diff -- . ; plus untracked files listed in the report). VERIFY the test gate ran + supports passed. pass=false if any blocking defect.`,
+          { label: `review:${dev.id}:${lens}`, phase: 'Work', schema: REVIEW_SCHEMA }
+        )),
+    ])).filter(Boolean)
     record.reviews = reviews
-    const green = reviews.length === 2 && reviews.every(r => r.pass) && impl.tests_passed !== false
+    const green = reviews.length === 3 && reviews.every(r => r.pass)
     record.green = green
 
     // -- 5 COMMIT on green (feature branch, no push) --
     if (green && isGit && impl.files_changed && impl.files_changed.length) {
       record.committed = await agent(
-        `The change in ${folder} PASSED plan-challenge, the test gate, and both reviews. Commit it:
+        `The change in ${folder} PASSED plan-challenge, the test gate, and all three reviews. Commit it:
 - branch: create ${impl.branch || 'auto/standup-<short-slug>'} from the current default branch. Commit this task's edits onto that fresh feature branch.
 - stage ONLY: ${JSON.stringify(impl.files_changed)} (never git add -A; NEVER stage .standup/ progress files)
 - commit message: ${impl.commit_message || '(write a clear conventional message)'}
 Do NOT push/merge/deploy. Report commit hash + branch.`,
         { label: `commit:${dev.id}`, phase: 'Work', schema: WORK_SCHEMA }
       )
+      // -- 6 SUPERVISOR final review (of the COMMITTED diff — the last gate before it's called done) --
+      if (record.committed && record.committed.status === 'committed') {
+        record.supervisor_final = await agent(
+          `You are the autonomous SUPERVISOR. FINAL review of the COMMITTED change in ${folder} before it is called done — the last gate. Read the committed diff (git -C ${folder} show HEAD -- .).
+TASK/GOAL: ${t.task}\nPlan it was meant to deliver: ${JSON.stringify(plan)}\nReview verdicts: ${JSON.stringify(reviews.map(r => r.verdict))}
+approve=false (with must_fix) if it does not deliver the goal, a gate was rubber-stamped, the wrong files were staged, or the commit is not what the reviews approved.`,
+          { label: `sup:final:${dev.id}`, phase: 'Work', schema: SUP_SCHEMA }
+        )
+      }
     }
 
-    record.status = record.committed && record.committed.status === 'committed' ? 'committed' : (green ? 'green-not-committed' : 'review-failed')
+    record.status = (record.supervisor_final && record.supervisor_final.approve === false) ? 'supervisor-rejected'
+      : (record.committed && record.committed.status === 'committed') ? 'committed'
+      : (green ? 'green-not-committed' : 'review-failed')
     worked.push(record)
    } catch (e) {
       // A single agent({schema}) throw must NOT abort the whole tick — record + continue.

@@ -3,6 +3,26 @@
 All notable changes to the **agent-team** plugin. Format: [Keep a Changelog](https://keepachangelog.com/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.4] — 2026-07-14
+
+Complete the gated SDLC — add the gates the Work pipeline was missing (it went
+IMPLEMENT → 2-lens review → commit, with the test only self-reported and no supervisor
+sign-off).
+
+### Added
+- **Independent TEST GATE** after IMPLEMENT (`standup/standup.workflow.js`): a dev runs
+  the checks and a SUPERVISOR verifies their HONESTY (commands really ran, evidence
+  supports pass). unit/dev tests always; **integration** tests when the project has a
+  suite; **visual/E2E** live verification when the task changes UI (real running
+  instance, not an HTTP 200 or a screenshot).
+- **Pair review of the DIFF**: the lanemate who challenged the plan now also reviews the
+  actual change — so REVIEW is pair + two fresh-context lenses (3 reviewers), not 2.
+- **Supervisor final review** of the COMMITTED diff — the last gate before it's called
+  done (catches a rubber-stamped or wrong-files commit).
+
+Full sequence now: INVESTIGATE → PLAN → pair CHALLENGE → IMPLEMENT → TEST GATE (+
+supervisor honesty check) → REVIEW (pair-diff + 2 lenses) → COMMIT → SUPERVISOR final.
+
 ## [0.3.3] — 2026-07-14
 
 Add a **greenfield-aware INVESTIGATE phase** to the gated SDLC. Previously the Work
