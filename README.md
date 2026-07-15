@@ -1,12 +1,16 @@
-# Agent Team MVP
+# Agent Team
 
 A **clone-and-run AI engineering team you drive from Claude Code.** Open this folder in
-Claude Code, type a prompt, and a paired-squad team runs a full gated standup — plan →
-challenge → implement → test → review → commit — on a bundled sample project. A local
-**Mission Control** portal runs alongside so you can watch and manage the squads in the
-browser, and **you are the approval gate**.
+Claude Code, type a prompt, and a paired-squad team runs a full gated SDLC —
+investigate → plan → pair-challenge → implement → test gate → review → commit →
+supervisor sign-off — on a bundled sample project. A local **Mission Control** portal
+runs alongside so you can watch and manage the squads in the browser, and **you are the
+approval gate** for anything irreversible (merge / deploy).
 
-No external services, no credentials, no network — everything runs locally.
+You (Claude Code) run it as the **Engineering Manager**: a supervisor who orchestrates the
+squads and gates the work but **produces no code itself** — every change is done by the team
+through the gated pipeline. No external services, no credentials, no network — everything
+runs locally.
 
 ---
 
@@ -33,16 +37,28 @@ That's it. The team is Claude Code sub-agents; Claude Code (as the EM) orchestra
 ## Install as a plugin (share it with a team)
 
 This repo is also a **Claude Code plugin** (`agent-team`) with its own marketplace, so others can
-install the commands and run them in any project:
+install the commands and run them in any project — same flow in the Claude Code **CLI**, the
+**desktop app**, and **claude.ai**:
 
 ```
 /plugin marketplace add Kain1989/agent-team
 /plugin install agent-team@agent-team-marketplace
-/agent-team:init          # scaffold a team project here, then /agent-team:standup
+/reload-plugins                       # activate in the current session (no restart needed)
 ```
+
+**Verify:** `/plugin list` should show `agent-team`. Then try `/agent-team:standup`, or
+`/agent-team:init` to scaffold a team project in the current folder.
 
 Installed, the commands are namespaced (`/agent-team:standup`, `/agent-team:portal`, …). If you
 just clone + open the folder, the two headline commands also work unprefixed (`/standup`, `/portal`).
+
+**First-time notes:**
+- Claude Code may ask you to **trust** the folder, and the plugin's hooks may prompt for
+  **permission** to run their scripts — approve them to let it load.
+- The plugin ships **hooks** (a SessionStart charter + a per-prompt reminder + a PreToolUse gate
+  that keep the EM in *supervisor mode*). They are **cwd-gated** — they only fire inside an
+  agent-team checkout, so installing the plugin does **not** touch your other, unrelated projects.
+- **Uninstall:** `/plugin uninstall agent-team@agent-team-marketplace`.
 
 ## Commands
 

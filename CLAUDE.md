@@ -89,16 +89,24 @@ worktree → review the diff → **Approve** → commit. (Details: `standup/port
 
 ## The gated SDLC (every task, no exceptions)
 
-1. **Plan** — the assignee writes a plan first, no code.
+0. **Investigate** — the assignee gathers real evidence read-only FIRST (observe reality, not
+   imagination); classifies the task brownfield/greenfield and judges feasibility (a from-scratch
+   task with a zero baseline is a valid start, not a blocker). A plan built on a wrong assumption
+   is the #1 failure — this is what prevents it.
+1. **Plan** — grounded in that evidence, no code.
 2. **Plan challenge** — the pair critiques the plan in a *fresh context* (direction, scope,
    risks, tests); one revision cycle, then escalate (never loop).
 3. **Implement** — one task at a time; write/extend tests; update the dev's `.standup/` progress file.
-4. **Test gate** — the suite must actually run and pass; record the exact commands.
-5. **Review** — 2 parallel fresh-context reviewers (correctness; conventions+tests). The
-   writer never grades own work.
+4. **Test gate** — a deterministic gate the supervisor verifies for *honesty*: unit/dev tests
+   always; **integration** tests when the project has a suite; **visual/E2E** live verification
+   when the task changes UI (the real running instance, not an HTTP 200 or a screenshot).
+5. **Review** — the pair reviews the actual **diff**, plus 2 fresh-context lenses (correctness;
+   conventions+tests). The writer never grades own work.
 6. **Commit on green** — feature branch, stage only the task's files (never `git add -A`,
    never the `.standup/` progress files).
-7. **Push / merge / deploy** — out of scope here; left to the human.
+7. **Supervisor final review** — the supervisor signs off on the committed diff before it is
+   called done.
+8. **Push / merge / deploy** — out of scope here; the irreversible human gate.
 
 Doctrine: divide by responsibility (not debate), pairs *critique* (free-form debate
 degrades quality), deterministic test gates, name experts only for alignment tasks, human
