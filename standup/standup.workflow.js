@@ -119,6 +119,17 @@ const PULSE_SCHEMA = {
   },
 }
 
+const EVIDENCE_SCHEMA = {
+  type: 'object', required: ['findings', 'files', 'feasible'],
+  properties: {
+    findings: { type: 'array', items: { type: 'string' }, description: 'what the code/data ACTUALLY shows' },
+    files: { type: 'array', items: { type: 'string' }, description: 'files in play (for greenfield: where the new code will live)' },
+    risks: { type: 'array', items: { type: 'string' } },
+    task_kind: { type: 'string', enum: ['brownfield', 'greenfield'] },
+    feasible: { type: 'boolean', description: 'false ONLY if the task genuinely cannot be attempted — never for a greenfield zero-baseline' },
+  },
+}
+
 const PLAN_SCHEMA = {
   type: 'object', required: ['plan', 'files_expected', 'tests_planned'],
   properties: {
@@ -279,12 +290,23 @@ if (DO_WORK) {
     const isGit = !!dev.git
     const record = { task: t.task, assignee: dev.id, project: t.project, team: dev._team, folder, isGit }
 
-    // -- 1 PLAN (no code) --
+    // -- 0 INVESTIGATE (read-only: observe reality BEFORE planning — a plan from imagination is the #1 failure) --
+    const evidence = await agent(
+      `You are "${dev.id}" (${dev.role}) on squad ${dev._team}, folder ${folder}. INVESTIGATE — READ-ONLY, gather real evidence; make NO edits, write NO code.
+TASK: ${t.task} (${t.priority}/${t.effort}).
+Read your progress file ${progressFile(dev)} (if present), the project's README${dev.context ? `, ${dev.context}` : ''}, and the ACTUAL source/data the task touches${isGit ? `, git -C ${folder} log/status -- .` : ''}. Observe reality, not imagination — verify assumptions against the real code (e.g. which component/library actually renders a thing), because a plan built on a wrong assumption is the #1 failure.
+Judge FEASIBILITY, not readiness. Set task_kind='greenfield' if the task builds something NEW (a PoC, a new integration, a from-scratch module) — a ZERO baseline / "it doesn't exist yet" / a dirty branch is the EXPECTED starting point, NOT a blocker; else 'brownfield'. Set feasible=false ONLY if the task genuinely cannot be attempted (the data/API/permission it needs does not exist and cannot be obtained, or the task contradicts what the code/data shows). Report findings, files in play (for greenfield: where the new code will live), and risks.`,
+      { label: `investigate:${dev.id}`, phase: 'Work', agentType: 'Explore', schema: EVIDENCE_SCHEMA }
+    )
+    record.evidence = evidence
+    if (!evidence || evidence.feasible === false) { record.status = 'blocked-investigate'; record.reason = (evidence && evidence.risks) || 'infeasible as written'; worked.push(record); continue }
+
+    // -- 1 PLAN (no code) — grounded in the INVESTIGATE evidence, not imagination --
     let plan = await agent(
       `You are "${dev.id}" (${dev.role}) on squad ${dev._team}. PLAN ONLY — write NO code, make NO edits.
 TASK: ${t.task} (${t.priority}/${t.effort}) in folder ${folder}.
-First read your progress file ${progressFile(dev)} (if present), the project's README${dev.context ? `, ${dev.context}` : ''}, and the relevant source files.
-Produce a step-by-step implementation plan: exact files to touch, the approach, which tests you will write or run (your lane's test gate: ${dev.tests || 'project test suite'}), and risks. Plans solving the wrong problem are the #1 failure — restate the task's intent in one sentence first.`,
+EVIDENCE from your INVESTIGATE (ground the plan in THIS, do not re-imagine): ${JSON.stringify(evidence)}
+Produce a step-by-step implementation plan: exact files to touch (for a greenfield task, the new files to create), the approach, which tests you will write or run (your lane's test gate: ${dev.tests || 'project test suite'}), and risks. Plans solving the wrong problem are the #1 failure — restate the task's intent in one sentence first.`,
       { label: `plan:${dev.id}`, phase: 'Work', schema: PLAN_SCHEMA }
     )
     record.plan = plan

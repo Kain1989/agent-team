@@ -3,6 +3,25 @@
 All notable changes to the **agent-team** plugin. Format: [Keep a Changelog](https://keepachangelog.com/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.3] — 2026-07-14
+
+Add a **greenfield-aware INVESTIGATE phase** to the gated SDLC. Previously the Work
+pipeline went straight to PLAN, so a plan could be built on imagination or a wrong
+assumption (the #1 failure mode) instead of on observed reality.
+
+### Added
+- **INVESTIGATE (read-only) before PLAN** in `standup/standup.workflow.js`: an Explore
+  agent gathers real evidence (findings, files in play, risks) and classifies the task
+  as `brownfield` (modifies existing code) or `greenfield` (builds something new). PLAN
+  is now grounded in that evidence instead of re-imagining the code.
+
+### Fixed
+- **Greenfield / from-scratch tasks no longer short-circuit.** INVESTIGATE judges
+  FEASIBILITY, not readiness: a zero baseline, "it doesn't exist yet", or a dirty branch
+  is the EXPECTED start of a from-scratch task, not a blocker. It stops only when the task
+  is genuinely infeasible (the data/API/permission it needs doesn't exist, or the task
+  contradicts reality).
+
 ## [0.3.2] — 2026-07-14
 
 Tighten **supervisor mode** from lenient to the **aggressive** model. In 0.3.1 the gate
