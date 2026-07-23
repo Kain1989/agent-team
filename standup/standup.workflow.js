@@ -6,8 +6,9 @@ export const meta = {
     { title: 'Standup',    detail: 'one read-only agent per active developer; reads <folder>/.standup/<dev>.md to resume context' },
     { title: 'Team Sync',  detail: 'per-squad merge: squad board + cross-project dependencies' },
     { title: 'Synthesize', detail: 'EM merges squad boards into one ranked board' },
-    { title: 'Staff Pulse',detail: 'light-but-real lens from pm_agent (scope/say-no) + design_lead (portal UI)' },
-    { title: 'Work',       detail: 'SDLC per autoworkable task: plan -> pair challenge (fresh ctx) -> implement+tests -> 2-lens review -> commit-on-green (feature branch, no push)' },
+    { title: 'Design',     detail: 'design_lead runs the deterministic judge (control/verify_design_quality.js) over the live UI, then judges the [JUDGMENT] rules of DESIGN_RULEBOOK.md; every finding cites a rule id. Runs BEFORE Synthesize so its tasks land on THIS tick\'s board instead of in a progress file nobody reads' },
+    { title: 'Staff Pulse',detail: 'light-but-real lens from pm_agent (scope/say-no) + design_lead (delivery of the design queue)' },
+    { title: 'Work',       detail: 'SDLC per autoworkable task: plan -> pair challenge (fresh ctx) -> implement+tests -> review (pair + correctness + conventions+tests, PLUS a design-quality lens whenever the change is observable) -> commit-on-green (feature branch, no push)' },
   ],
 }
 
@@ -19,12 +20,33 @@ const DATE    = (A && A.date)    || 'UNKNOWN-DATE'
 const SINCE   = (A && A.since)   || '6 hours ago'
 const DO_WORK = !!(A && A.work)
 const MAXTASK = (A && A.maxTasks) || 2
-const DO_DESIGN = !!(A && A.design)   // morning: design_lead screenshots the portal UI + files design tasks
+const DO_DESIGN = !!(A && A.design)   // deep design tick: sweep every surface instead of a rotation
+// The running instance the design gate judges. A PARAMETER, never a baked-in default: point it at
+// YOUR app (e.g. args.designUrl = "http://127.0.0.1:8770" for the bundled portal). A roster entry
+// may override it per-dev/per-squad with a `url` field. Empty => the agent must derive the URL from
+// the project's own run method and say so; it may NOT skip the gate.
+const DESIGN_URL = (A && A.designUrl) || ''
 
 // Mechanical evidence-gathering (standup reporters, comms, pulse) can use a cheaper tier;
 // the EM/developer work (plan/challenge/implement/review/sync) inherits the top session model.
 // Leave MECH_MODEL undefined to make every agent inherit the session model (simplest for a shared MVP).
 const MECH_MODEL = undefined
+
+// ---- EFFORT TIERS (Workflow opts.effort; omit => inherit the session's effort) ----
+// Not every agent in a run is doing the same KIND of thinking, and until this existed they all ran
+// at one depth. Tiering follows the current model guidance: `low` for sub-agents doing simple,
+// mechanical work; `high` as the floor for intelligence-sensitive work; `xhigh` for coding and
+// agentic loops (what a coding agent uses by default).
+const E_MECH  = 'low'     // evidence-gathering, polling, mechanical git steps
+const E_JUDGE = 'high'    // review, product judgment, design, synthesis
+const E_BUILD = 'xhigh'   // implementation (coding / agentic loops)
+// DELIBERATELY left inheriting — this is a judgment call, not an oversight:
+//   `sync`       merging a handful of reports; middling depth, and it is on the critical path.
+//   `comms`      triage decides whether a thread is CLOSED; downgrading closure judgment is how
+//                already-answered items get re-raised as todos. Not cheapening it.
+//   `testgate`   mostly running commands; the HONESTY check over it is what needs depth (E_JUDGE).
+// `max` is used nowhere: it shows diminishing returns and can overthink. If you want to move any
+// of these, measure it on your own eval first — do not tune effort by intuition.
 
 // Embedded fallback roster (source of truth: standup/team.json — the launcher passes it as args.roster).
 const EMBEDDED_ROSTER = {
@@ -60,6 +82,54 @@ const TEAMS = (RAW.teams || [{ id: 'workspace', name: 'Workspace', mission: '', 
   .filter(t => t.developers.length > 0)
 const DEVS = TEAMS.flatMap(t => t.developers.map(d => ({ ...d, _team: t.id })))
 const STAFF = (RAW.staff || []).filter(s => s.active)
+
+// ---- DESIGN_RULEBOOK rule-id registry (E-01) ----
+// E-01 says every design finding must cite a rule id. Checking only that SOMETHING was cited lets
+// any string impersonate a rule — at which point the citation discipline that replaced prose
+// rubrics has quietly become decorative. The legal set is read from the rulebook FILE, so a
+// genuinely new rule has to LAND in DESIGN_RULEBOOK.md before it is citable (propose -> queue ->
+// land), instead of being minted at the point of use.
+const RULEBOOK_PATHS = ['DESIGN_RULEBOOK.md', '../DESIGN_RULEBOOK.md', 'standup/../DESIGN_RULEBOOK.md']
+// Fallback ONLY — same contract as EMBEDDED_ROSTER above: the FILE is the source of truth, and
+// RULE_IDS_SOURCE reports which one was used (a silently-embedded copy drifting from the rulebook
+// would be this same bug wearing the other mask).
+const EMBEDDED_RULE_IDS = ['A-01','A-02','A-03','A-04','B-01','B-02','B-03','B-04','B-05','B-06',
+  'C-01','C-02','C-03','C-04','D-01','D-02','D-03','D-04','E-01','E-02','E-03','E-04','E-05','E-06','E-07']
+let RULE_IDS = null
+let RULE_IDS_SOURCE = 'embedded fallback (DESIGN_RULEBOOK.md unreadable from this harness)'
+try {
+  const _fs = await import('node:fs')
+  for (const p of RULEBOOK_PATHS) {
+    let src = null
+    try { src = _fs.readFileSync(p, 'utf8') } catch (e) { continue }
+    // Wide family match (A-Z, not just today's A-E) so a NEW rule family is citable the moment it
+    // lands in the rulebook, with no edit here.
+    const ids = String(src).match(/\b[A-Z]-\d{2}\b/g)
+    if (ids && ids.length) { RULE_IDS = new Set(ids); RULE_IDS_SOURCE = p; break }
+  }
+} catch (e) { /* no fs in this harness — fall through to the embedded set */ }
+if (!RULE_IDS) RULE_IDS = new Set(EMBEDDED_RULE_IDS)
+const RULE_ID_LIST = [...RULE_IDS].sort().join(' ')
+
+// Detection is DELIBERATELY wider than the legal set: an invented "F-99" must register as a
+// CITATION (then be rejected as unknown), not read as "no id cited" — otherwise a made-up family
+// is the one thing the check misses.
+const citedRuleIds = v => String((v === null || v === undefined) ? '' : v).match(/\b[A-Z]-\d{2}\b/g) || []
+const RULEBOOK_PROPOSALS = []
+// E-01 admission: an entry citing no id, or an id absent from the rulebook, is INADMISSIBLE.
+const admitByRule = (list, what) => {
+  const kept = [], rejected = []
+  for (const it of (Array.isArray(list) ? list : [])) {
+    const cited = citedRuleIds(it && it.rule)
+    const bad = cited.filter(id => !RULE_IDS.has(id))
+    if (!cited.length) rejected.push({ ...it, _inadmissible: 'E-01: no DESIGN_RULEBOOK rule id cited' })
+    else if (bad.length) rejected.push({ ...it, _inadmissible: `E-01: rule id(s) not in DESIGN_RULEBOOK.md: ${bad.join(', ')}` })
+    else kept.push(it)
+    for (const id of bad) if (!RULEBOOK_PROPOSALS.includes(id)) RULEBOOK_PROPOSALS.push(id)
+  }
+  if (rejected.length) log(`E-01 admission: dropped ${rejected.length}/${rejected.length + kept.length} ${what} — ${rejected.map(r => r._inadmissible).join(' ; ')}`)
+  return { kept, rejected }
+}
 
 // ---- schemas ----
 const REPORT_SCHEMA = {
@@ -162,6 +232,43 @@ const WORK_SCHEMA = {
 
 const REVIEW_SCHEMA = { type: 'object', required: ['pass', 'verdict'], properties: { pass: { type: 'boolean' }, verdict: { type: 'string' } } }
 
+// The design-quality lens's structured output. Findings are FORCED to carry a rule id (E-01), and
+// the machine judge's exit code is a first-class field — so `pass` binds to a script's verdict
+// rather than to prose, which can always be written to sound convincing.
+const DESIGN_REVIEW_SCHEMA = {
+  type: 'object', required: ['pass', 'verdict', 'machine_gate'],
+  properties: {
+    pass: { type: 'boolean' },
+    verdict: { type: 'string' },
+    machine_gate: {
+      type: 'object', required: ['ran', 'exit_code', 'url'],
+      properties: {
+        ran: { type: 'boolean', description: 'was verify_design_quality.js actually executed' },
+        exit_code: { type: 'number', description: '0=no violations 1=violations 2=cannot run (page/browser) 64=usage error' },
+        url: { type: 'string', description: 'the running instance actually judged' },
+        violations: { type: 'number' },
+        by_rule: { type: 'string', description: 'e.g. "A-02x42, A-03x8, B-01x1"' },
+      },
+    },
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object', required: ['rule', 'detail'],
+        properties: {
+          rule: { type: 'string', description: 'DESIGN_RULEBOOK id, e.g. A-01/B-03/C-02. E-01: a finding without one does not stand' },
+          detail: { type: 'string' },
+          surface: { type: 'string', description: 'the page/component the violation is on' },
+        },
+      },
+    },
+    systemic: {
+      type: 'array',
+      description: 'E-02: rule ids cited >=2 times + WHERE the shared component to change lives (per-file tickets are forbidden)',
+      items: { type: 'string' },
+    },
+  },
+}
+
 const DQ_SCHEMA = {
   type: 'object', required: ['ran', 'passed', 'evidence'],
   properties: {
@@ -224,7 +331,7 @@ ${dev.git
 - standup/BACKLOG.md for carried tasks.
 
 Report: DONE in window, IN PROGRESS, ranked NEXT in your lane (P0-P2, S/M/L, why), BLOCKERS, needs_from_team, health. Concrete, file-level, no filler.`,
-      { label: `standup:${dev.id}`, phase: 'Standup', agentType: 'Explore', model: MECH_MODEL, schema: REPORT_SCHEMA }
+      { label: `standup:${dev.id}`, phase: 'Standup', agentType: 'Explore', model: MECH_MODEL, effort: E_MECH, schema: REPORT_SCHEMA }
     ).then(r => r ? { ...r, _dev: dev.id, _team: team.id } : null)
   }))).filter(Boolean)
 
@@ -243,6 +350,116 @@ Produce the squad sync: narrative, health, squad-RANKED board (assignee = develo
 }))).filter(Boolean)
 
 const reports = squads.flatMap(s => s.reports)
+// NARRATION — log the CONCLUSION, never "starting X", and put the number that matters on the line.
+// A run spawns dozens of agents over an hour and used to say nothing on the happy path: you could
+// watch the whole progress tree without learning what design scored or which review blocked a task.
+log(`SQUADS ${squads.length} synced / ${reports.length} dev report(s): ` +
+  squads.map(s => `${s.team}=${(s.sync && s.sync.health) || '?'}`).join(' '))
+{
+  const _blk = squads.flatMap(s => ((s.sync && s.sync.blockers) || []).map(b => `[${s.team}] ${b}`))
+  if (_blk.length) log(`BLOCKERS ${_blk.length} raised: ${_blk.slice(0, 3).join(' · ').slice(0, 220)}${_blk.length > 3 ? ` … +${_blk.length - 3}` : ''}`)
+}
+
+// ---- Phase 2b: DESIGN — the design pass, BEFORE Synthesize ----
+// This used to run as the LAST phase, after Work. Two consequences, both fatal:
+//   1. the code was already committed, so a design critique could not block anything;
+//   2. its output went into the design lead's progress file — which the one developer who could
+//      act on it never read. Same defects found tick after tick, zero landed.
+// Now it runs before the board is synthesized, so its findings become QUEUE ITEMS on THIS tick's
+// board, and every one of them cites a DESIGN_RULEBOOK rule id (E-01) so it can be tracked.
+phase('Design')
+const DESIGN_LEADS = STAFF.filter(s => s.role && /design/i.test(s.role))
+const DESIGN_SCHEMA = {
+  type: 'object', required: ['summary', 'tasks'], properties: {
+    lens: { type: 'string' },
+    summary: { type: 'string', description: 'overall design verdict, 3-5 sentences' },
+    score: { type: 'number', description: 'current UI quality 1-10 against this rubric' },
+    machine_gate: {
+      type: 'object', description: 'the deterministic verdict of verify_design_quality.js — a referee, not an opinion',
+      properties: {
+        ran: { type: 'boolean' }, urls_scanned: { type: 'number' },
+        total_violations: { type: 'number' },
+        by_rule: { type: 'string', description: 'e.g. "A-02x42, A-03x8, B-01x1"' },
+        worst_surfaces: { type: 'array', items: { type: 'string' } },
+      },
+    },
+    tasks: { type: 'array', items: { type: 'object', required: ['task', 'priority', 'effort', 'rule'], properties: {
+      task: { type: 'string' },
+      rule: { type: 'string', description: 'DESIGN_RULEBOOK rule id (E-01, mandatory). Comma-separate several' },
+      priority: { type: 'string', enum: ['P0', 'P1', 'P2'] },
+      effort: { type: 'string', enum: ['S', 'M', 'L'] }, files: { type: 'string' },
+      systemic: { type: 'boolean', description: 'E-02: this rule was cited >=2 times, so it is a SHARED-COMPONENT fix, not a per-file ticket' },
+      autoworkable: { type: 'boolean' } } } },
+    // The main deliverable. tasks[] is a defect list; `design` is design. A PM/UX who only reviews
+    // or vetoes at a checkpoint is not shaping the product and adds nothing — shipping only tasks[]
+    // is gating; shipping a spec a frontend dev can build from without coming back is participation.
+    design: {
+      type: 'object',
+      description: 'a complete design for the ONE surface most worth rebuilding this tick — specific enough to build from',
+      properties: {
+        surface: { type: 'string' },
+        purpose: { type: 'string', description: 'who this screen is for and what decision it supports' },
+        layout: { type: 'string', description: 'what goes where, the hierarchy, what is above the fold. ASCII wireframe is fine' },
+        states: { type: 'string', description: 'loading / empty / error / partial-data — each an actual designed state (C-04)' },
+        remove: { type: 'string', description: 'what to DELETE. A design that only adds is not a design' },
+      },
+    },
+  } }
+const critiques = DESIGN_LEADS.length ? (await parallel(DESIGN_LEADS.map(lead => () => agent(
+  `You are "${lead.id}" — ${lead.role}. Date ${DATE}. Be demanding, not polite.
+YOUR RUBRIC (your lens): ${lead.rubric || lead.charter || lead.focus || 'clarity, deference, depth; the states hover/focus/loading/error/empty'}
+
+THE CRITERION IS **DESIGN_RULEBOOK.md** (read it first). It is a numbered rule table, not prose:
+your rubric is the lens, the rule ids are the language. Every finding MUST cite a rule id (E-01) —
+a finding that cannot cite one does not enter the queue.
+⚠️ Rule ids may ONLY come from these ${RULE_IDS.size} (this is validated in code; anything else is dropped):
+${RULE_ID_LIST}
+If you genuinely need a new rule, write "propose a new rule: <text>" and cite E-01 — do NOT invent an
+id on the spot. A new rule must land in DESIGN_RULEBOOK.md before it is citable.
+
+STEP 1 — run the deterministic judge (this is the referee; do not skip it):
+    node standup/control/verify_design_quality.js <url> --json /tmp/dq-${lead.id}.json
+  ${DESIGN_URL
+    ? `The URL to judge: ${DESIGN_URL}`
+    : `No URL was configured (args.designUrl is empty). Work out the running instance's URL from the project's own run method (its README / run script) and START it if needed. If you truly cannot reach a running instance, set machine_gate.ran=false and say exactly why — do NOT report a clean sweep you did not run.`}
+  ${DO_DESIGN ? 'DEEP tick: sweep every surface of the app.' : 'LIGHT tick: sweep 3-5 surfaces — those touched in this window, plus at least one never swept before (rotate).'}
+  Record the exit code and the per-rule violation counts in machine_gate. Exit 2 = could not run.
+
+STEP 2 — judge the [JUDGMENT] rules a script cannot decide (B-03 color semantics, B-04 factory
+  defaults, B-05 indistinguishable near-duplicates, C-01 single focus, C-02 empty de-emphasis,
+  C-04 designed empty states, D-02 numeral typography, D-04 title/state separation) against a REAL
+  SCREENSHOT you took. ⚠️ E-07: a machine PASS proves NOTHING. The judge catches "looks wrong" and
+  is blind to "looks right, is lying" — a page of per-card-normalized sparklines renders perfectly
+  and inverts the true ranking. Ask explicitly: could this screen lead someone to a conclusion the
+  data does not support?
+
+STEP 3 — E-02: any rule id you cite >=2 times becomes ONE systemic task ("change the shared
+  component / the rule, then regenerate the affected batch") with the component's location — NOT N
+  per-file tickets. Mark it systemic=true; it outranks ordinary P0s because one fix clears many.
+
+STEP 4 — hand over a real DESIGN for the single surface most worth rebuilding (purpose, layout,
+  states, and what to DELETE), not just a defect list. Do NOT implement anything here: your tasks
+  enter this tick's board and go through the gate chain like any other work.
+Append a dated entry to ${lead.folder ? `${lead.folder}/.standup/${lead.id}.md` : `standup/.standup/${lead.id}.md`} (create the dir if needed).`,
+  { label: `design:${lead.id}`, phase: 'Design', effort: E_JUDGE, schema: DESIGN_SCHEMA }
+).then(r => r ? { ...r, _lead: lead.id } : null)))).filter(Boolean) : []
+// E-01 existence check — a design task citing an id that is not in DESIGN_RULEBOOK.md never
+// reaches the board. Before this, `rule` was whatever string the model felt like writing.
+for (const c of critiques) {
+  const adm = admitByRule(c.tasks, `design task(s) from ${c._lead}`)
+  c.tasks = adm.kept
+  if (adm.rejected.length) c.inadmissible_tasks = adm.rejected
+}
+for (const c of critiques) {
+  const mg = c.machine_gate || {}
+  log(`DESIGN ${c._lead}: score ${c.score ?? '?'}/10 · machine judge ${mg.total_violations ?? '?'} violation(s)` +
+    (mg.urls_scanned ? ` over ${mg.urls_scanned} surface(s)` : '') +
+    (mg.by_rule ? ` — ${String(mg.by_rule).slice(0, 90)}` : '') +
+    ` · ${(c.tasks || []).length} task(s) boarded` +
+    (c.design && c.design.surface ? ` · design for: ${String(c.design.surface).slice(0, 60)}` : ' · ! NO design delivered (defect list only)'))
+}
+const design = critiques.length ? { leads: critiques } : null
+const DESIGN_TASKS = critiques.flatMap(c => (c.tasks || []).map(t => ({ ...t, _lead: c._lead })))
 
 // ---- Phase 3: SYNTHESIZE (EM board) ----
 phase('Synthesize')
@@ -251,6 +468,7 @@ const board = await agent(
 
 ${JSON.stringify(squads.map(s => ({ team: s.team, name: s.name, sync: s.sync })), null, 2)}
 ${comms ? `\nComms-triage routed action items (tag these source=comms on the board):\n${JSON.stringify(comms.items, null, 2)}` : ''}
+${DESIGN_TASKS.length ? `\nDESIGN tasks from THIS tick's design pass — rank them like any other item; each already carries a DESIGN_RULEBOOK rule id in its title, KEEP it (E-01) so the fix is traceable to the rule. Items marked systemic=true rank ABOVE ordinary P0s: one of them clears many violations (E-02), where a per-file ticket clears one.\n${JSON.stringify(DESIGN_TASKS, null, 2)}` : ''}
 
 Produce the EM standup: narrative across squads (call out cross-squad dependencies explicitly), overall health, today's RANKED board merged across squads (P0 first; keep team + assignee; source=standup|comms), consolidated blockers. autoworkable=true ONLY if pure code/analysis with no outward side effects.
 
@@ -258,8 +476,17 @@ PM DISCIPLINE (you also wear the Product Manager hat — demanding, Jobs-grade '
 - PIN keystone items: any task tagged KEYSTONE in standup/BACKLOG.md or blocking >=2 other tasks MUST rank above unblocked busywork.
 - Every board item needs an outcome shape: what done means + how it is verified, one line.
 - Flag dated risks at the top of blockers.`,
-  { label: 'em:synthesize', phase: 'Synthesize', schema: BOARD_SCHEMA }
+  { label: 'em:synthesize', phase: 'Synthesize', effort: E_JUDGE, schema: BOARD_SCHEMA }
 )
+{
+  const _items = (board && board.todays_board) || []
+  log(`BOARD ${_items.length} item(s), ${_items.filter(t => t.priority === 'P0').length} P0, ` +
+    `${_items.filter(t => t.autoworkable).length} autoworkable · team health ${(board && board.team_health) || '?'}` +
+    (_items.length ? ` · top: ${String(_items[0].task || '').slice(0, 80)}` : ''))
+  if (RULEBOOK_PROPOSALS.length) {
+    log(`RULEBOOK PROPOSALS this tick — ids cited but not defined: ${RULEBOOK_PROPOSALS.join(', ')}. Land them in DESIGN_RULEBOOK.md (with a real recorded violation, per E-03) or stop citing them.`)
+  }
+}
 
 // ---- Phase 3b: STAFF PULSE (light, every tick) — pm + design lenses ----
 phase('Staff Pulse')
@@ -273,7 +500,7 @@ const staffPulse = (await parallel(pulseStaff.map(member => () => {
   const isPM = member.id === 'pm_agent'
   const lensKick = isPM
     ? `PM lens (light, every-tick): scan THIS tick's board + squad state for scope creep, missing outcome-shapes, starved keystones. Challenge 1-3 board items where scope/direction is off; flag anything to kill/merge against standup/PM_GOALS.md if present.`
-    : `Design lens (light, every-tick): give a quick design read on the live portal UI (standup/portal Mission Control page) against your rubric (${member.rubric ? member.rubric.split(':')[0] : 'Apple HIG'}); call out the single biggest clarity/craft risk. Reserve a full screenshot critique for the morning design tick.`
+    : `Design lens (light, every-tick): the design SWEEP already ran this tick (Phase Design — machine judge + your rubric against DESIGN_RULEBOOK.md), so do NOT review the UI a second time. Your one job here is DELIVERY: of the rule-cited design tasks raised in earlier ticks, which actually LANDED, and which is on its Nth tick without a commit? Name the stalled ones and who owns them. A finding that is re-found every tick and never fixed is the failure mode this whole loop exists to stop.`
   return agent(
     `You are "${member.id}" — ${member.role}. EVERY-TICK STAFF PULSE for ${DATE} — a LIGHT but REAL pass.
 YOUR CHARTER/RUBRIC: ${member.charter || member.rubric || member.focus || ''}
@@ -281,19 +508,22 @@ THIS TICK (board + squads):
 ${PULSE_CONTEXT}
 ${lensKick}
 Keep it tight: a headline, a few concrete observations, and 0-3 light board nudges (note + owner + priority). engaged=false only if genuinely nothing in your lens is in scope.`,
-    { label: `pulse:${member.id}`, phase: 'Staff Pulse', model: MECH_MODEL, schema: PULSE_SCHEMA }
+    { label: `pulse:${member.id}`, phase: 'Staff Pulse', model: MECH_MODEL, effort: E_MECH, schema: PULSE_SCHEMA }
   ).then(r => r ? { ...r, _staff: member.id } : null)
 }))).filter(Boolean)
+log(`STAFF PULSE ${staffPulse.filter(p => p.engaged).length}/${staffPulse.length} engaged: ` +
+  staffPulse.map(p => `${p._staff}${p.engaged ? '' : '(skip)'}`).join(' '))
 
 // ---- Phase 4: WORK — gated SDLC per task (serial; folders are shared) ----
 let worked = []
 if (DO_WORK) {
   phase('Work')
-  const queue = (board.todays_board || [])
-    .filter(t => t.autoworkable)
+  const _autoworkable = (board.todays_board || []).filter(t => t.autoworkable)
+  const queue = _autoworkable
     .sort((a, b) => (a.priority || 'P2').localeCompare(b.priority || 'P2'))
     .slice(0, MAXTASK)
-  log(`SDLC-working ${queue.length} task(s) (cap=${MAXTASK})`)
+  log(`WORK QUEUE ${queue.length} of ${_autoworkable.length} autoworkable board item(s) (cap=${MAXTASK})` +
+    (queue.length ? `: ${queue.map(t => `${t.assignee}/${String(t.task || '').slice(0, 50)}`).join(' | ')}` : ' — nothing autoworkable this tick'))
 
   for (const t of queue) {
    try {
@@ -304,6 +534,7 @@ if (DO_WORK) {
     const folder = dev.folder
     const isGit = !!dev.git
     const record = { task: t.task, assignee: dev.id, project: t.project, team: dev._team, folder, isGit }
+    log(`TASK ${dev.id} · ${folder} · ${String(t.task).slice(0, 90)}`)
 
     // -- 0 INVESTIGATE (read-only: observe reality BEFORE planning — a plan from imagination is the #1 failure) --
     const evidence = await agent(
@@ -311,7 +542,7 @@ if (DO_WORK) {
 TASK: ${t.task} (${t.priority}/${t.effort}).
 Read your progress file ${progressFile(dev)} (if present), the project's README${dev.context ? `, ${dev.context}` : ''}, and the ACTUAL source/data the task touches${isGit ? `, git -C ${folder} log/status -- .` : ''}. Observe reality, not imagination — verify assumptions against the real code (e.g. which component/library actually renders a thing), because a plan built on a wrong assumption is the #1 failure.
 Judge FEASIBILITY, not readiness. Set task_kind='greenfield' if the task builds something NEW (a PoC, a new integration, a from-scratch module) — a ZERO baseline / "it doesn't exist yet" / a dirty branch is the EXPECTED starting point, NOT a blocker; else 'brownfield'. Set feasible=false ONLY if the task genuinely cannot be attempted (the data/API/permission it needs does not exist and cannot be obtained, or the task contradicts what the code/data shows). Report findings, files in play (for greenfield: where the new code will live), and risks.`,
-      { label: `investigate:${dev.id}`, phase: 'Work', agentType: 'Explore', schema: EVIDENCE_SCHEMA }
+      { label: `investigate:${dev.id}`, phase: 'Work', agentType: 'Explore', effort: E_MECH, schema: EVIDENCE_SCHEMA }
     )
     record.evidence = evidence
     if (!evidence || evidence.feasible === false) { record.status = 'blocked-investigate'; record.reason = (evidence && evidence.risks) || 'infeasible as written'; worked.push(record); continue }
@@ -322,7 +553,7 @@ Judge FEASIBILITY, not readiness. Set task_kind='greenfield' if the task builds 
 TASK: ${t.task} (${t.priority}/${t.effort}) in folder ${folder}.
 EVIDENCE from your INVESTIGATE (ground the plan in THIS, do not re-imagine): ${JSON.stringify(evidence)}
 Produce a step-by-step implementation plan: exact files to touch (for a greenfield task, the new files to create), the approach, which tests you will write or run (your lane's test gate: ${dev.tests || 'project test suite'}), and risks. Plans solving the wrong problem are the #1 failure — restate the task's intent in one sentence first.`,
-      { label: `plan:${dev.id}`, phase: 'Work', schema: PLAN_SCHEMA }
+      { label: `plan:${dev.id}`, phase: 'Work', effort: E_JUDGE, schema: PLAN_SCHEMA }
     )
     record.plan = plan
     if (!plan) { record.status = 'blocked'; worked.push(record); continue }
@@ -333,23 +564,25 @@ Produce a step-by-step implementation plan: exact files to touch (for a greenfie
 TASK: ${t.task}
 PLAN: ${JSON.stringify(plan, null, 2)}
 Check the actual code in ${folder} where the plan makes claims. approved=true only if direction AND test plan are sound.`,
-      { label: `challenge:${lanemate.id}`, phase: 'Work', schema: CHALLENGE_SCHEMA }
+      { label: `challenge:${lanemate.id}`, phase: 'Work', effort: E_JUDGE, schema: CHALLENGE_SCHEMA }
     )
     record.challenge = challenge
     if (challenge && !challenge.approved) {
       plan = await agent(
         `You are "${dev.id}". Your pair rejected your plan. Revise it to address EVERY required change, or push back with evidence only where they are factually wrong.
 TASK: ${t.task}\nORIGINAL PLAN: ${JSON.stringify(plan, null, 2)}\nCRITIQUE: ${JSON.stringify(challenge, null, 2)}`,
-        { label: `replan:${dev.id}`, phase: 'Work', schema: PLAN_SCHEMA }
+        { label: `replan:${dev.id}`, phase: 'Work', effort: E_JUDGE, schema: PLAN_SCHEMA }
       )
       record.plan = plan
       challenge = plan ? await agent(
         `You are "${lanemate.id}". Re-review the REVISED plan (your earlier critique attached). approved=true only if your required changes are addressed.
 TASK: ${t.task}\nREVISED PLAN: ${JSON.stringify(plan, null, 2)}\nYOUR EARLIER CRITIQUE: ${JSON.stringify(record.challenge, null, 2)}`,
-        { label: `rechallenge:${lanemate.id}`, phase: 'Work', schema: CHALLENGE_SCHEMA }
+        { label: `rechallenge:${lanemate.id}`, phase: 'Work', effort: E_JUDGE, schema: CHALLENGE_SCHEMA }
       ) : null
       record.rechallenge = challenge
     }
+    log(`  plan ${challenge && challenge.approved ? 'APPROVED by the pair' : 'REJECTED by the pair'}` +
+      (challenge && challenge.required_changes && challenge.required_changes.length ? ` (${challenge.required_changes.length} required change(s))` : ''))
     if (!challenge || !challenge.approved) { record.status = 'escalated-plan-rejected'; worked.push(record); continue }
 
     // -- 3 IMPLEMENT + TEST GATE (no commit) --
@@ -362,57 +595,164 @@ Rules:
 - Update your progress file ${progressFile(dev)} (create .standup/ if needed): append a dated entry — what you did, current state, next step. NEVER stage this file in commits.
 ${isGit ? `- Report a proposed branch (auto/standup-<slug>), one-line commit message, and the EXACT files changed (commit stages ONLY those — never git add -A).` : `- Not a git repo: status "draft-only".`}
 Follow the folder's conventions.`,
-      { label: `work:${dev.id}`, phase: 'Work', schema: WORK_SCHEMA }
+      { label: `work:${dev.id}`, phase: 'Work', effort: E_BUILD, schema: WORK_SCHEMA }
     )
     record.impl = impl
     if (!impl) { record.status = 'blocked'; worked.push(record); continue }
 
-    // -- 3.5 TEST GATE (deterministic: unit ALWAYS; integration if a suite exists; visual/E2E if UI; supervisor verifies HONESTY, not just the verdict) --
+    // OBSERVABLE = the change produces something a user can SEE (a chart, page, panel, flow,
+    // endpoint output). OWNER-AGNOSTIC on purpose: a BACKEND change that alters what renders is
+    // still observable. Detected from the role/lane/task text AND re-checked against the files
+    // actually changed, so a backend lane cannot quietly opt out of the visual gate.
+    // DELIBERATELY OVER-INCLUSIVE: because the role text counts, a UI-lane developer's change is
+    // treated as observable even when the diff looks like plumbing — a job-store refactor behind a
+    // board IS a rendering change. The cost of a false positive is one wasted verification; the
+    // cost of a false negative is shipping a broken screen. If your project has a lane that
+    // genuinely never renders anything, narrow the pattern here rather than teaching devs to write
+    // task titles that dodge it.
+    const _touchedFrontend = Array.isArray(impl.files_changed) && impl.files_changed.some(p =>
+      /(?:^|\/)(?:frontend|web|ui|client|static|templates)\//i.test(String(p)) || /\.(?:jsx|tsx|vue|svelte)$/i.test(String(p)) || /\.html?$/i.test(String(p)) || /\.s?css$/i.test(String(p)))
+    const OBSERVABLE_DQ = /chart|dashboard|render|panel|button|click|screen|\bpage\b|\btab\b|modal|dialog|widget|visual|user (?:sees|clicks|views)|\bUI\b|frontend|endpoint/i.test(`${dev.role || ''} ${dev.focus || ''} ${t.task || ''}`) || _touchedFrontend
+
+    // -- 3.5 TEST GATE (deterministic: unit ALWAYS; integration if a suite exists; visual/E2E when OBSERVABLE; supervisor verifies HONESTY, not just the verdict) --
     const dq = await agent(
       `You are "${dev.id}" (${dev.role}). TEST GATE for the change you just made in ${folder}. RUN the checks and record the EXACT commands + results — never claim untested work passes (ran=false / passed=false if you could not run them).
 - unit/dev tests (ALWAYS): ${dev.tests || 'the project test suite'} — put the commands + results in evidence.
 - integration: run the project's integration suite IF it has one; else integration="none".
-- visual/E2E: IF this task changed UI, verify it LIVE the way a human user would (drive the real running instance / Playwright / a headless screenshot you actually read — NOT an HTTP 200) and put that proof in visual; else visual="n/a".`,
+- visual/E2E — ${OBSERVABLE_DQ ? 'MANDATORY (this change is USER-VISIBLE — that includes a BACKEND lane whose change alters what renders): verify it LIVE the way a HUMAN USER would against the ACTUAL RUNNING INSTANCE. START the app with the project\'s own run method, drive a real browser (Playwright) or take a fresh capture you INSPECT yourself, NAVIGATE to the affected screen, CLICK through the real user path, and ASSERT what the user SEES. Put the concrete proof in visual (the run command, WHAT you clicked, WHAT rendered). NOT acceptable: unit/component tests, an HTTP 200, an offline render, or an earlier screenshot. If you CANNOT run it live, set passed=false and record the exact blocker — do NOT pass an observable change on unit tests alone.' : 'not user-visible for this task; set visual="n/a".'}`,
       { label: `testgate:${dev.id}`, phase: 'Work', schema: DQ_SCHEMA }
     )
     const dqOk = await agent(
-      `You are the autonomous SUPERVISOR. Verify the TEST GATE's HONESTY, not just its verdict. Report: ${JSON.stringify(dq)}. approve=false if the commands weren't actually runnable, the evidence doesn't support passed, integration/visual was claimed without real proof, or a UI change reports visual="n/a".`,
-      { label: `sup:testgate:${dev.id}`, phase: 'Work', schema: SUP_SCHEMA }
+      `You are the autonomous SUPERVISOR. Verify the TEST GATE's HONESTY, not just its verdict. Report: ${JSON.stringify(dq)}. approve=false if the commands weren't actually runnable, the evidence doesn't support passed, integration/visual was claimed without real proof, or a UI change reports visual="n/a".${OBSERVABLE_DQ ? ' This change is OBSERVABLE: approve=FALSE unless visual is GENUINE real-user proof against the live running app (a click-through the dev actually drove and inspected) — REJECT unit/component tests, HTTP 200s, offline renders, or a prior screenshot offered as the visual gate.' : ''}`,
+      { label: `sup:testgate:${dev.id}`, phase: 'Work', effort: E_JUDGE, schema: SUP_SCHEMA }
     )
     record.testgate = { dq, supervisor: dqOk }
-    if (!(dq && dq.ran && dq.passed && dqOk && dqOk.approve)) { record.status = 'test-gate-failed'; worked.push(record); continue }
+    // ⚠ This regex is a COARSE screen only: it checks whether the dev's prose smuggled a unit test
+    //   in as visual proof. It cannot judge whether the screen is any GOOD — that is the
+    //   design-quality lens below. Treating this check as the UI quality gate is how UI quality
+    //   ended up with nobody responsible for it.
+    const _visualSatisfied = !OBSERVABLE_DQ || (dq && typeof dq.visual === 'string' && dq.visual.trim() &&
+      !/^\s*(n\/?a|none|not applicable|n\.a\.)\s*$/i.test(dq.visual) &&
+      !/\b(http\s*200|only unit|unit test|component test|offline render|prior screenshot)\b/i.test(dq.visual))
+    log(`  test gate ${dq && dq.ran && dq.passed ? 'PASS' : 'FAIL'} · supervisor ${dqOk && dqOk.approve ? 'approve' : 'reject'}` +
+      (OBSERVABLE_DQ ? ` · observable change → live visual proof ${_visualSatisfied ? 'present' : 'MISSING (unit tests do not count)'}` : ''))
+    if (!(dq && dq.ran && dq.passed && dqOk && dqOk.approve && _visualSatisfied)) { record.status = 'test-gate-failed'; worked.push(record); continue }
 
-    // -- 4 REVIEW: pair-review of the DIFF + two fresh-context lenses (writer never grades own work) --
-    const reviews = (await parallel([
+    // -- 4 REVIEW: pair-review of the DIFF + fresh-context lenses (writer never grades own work) --
+    // THE DESIGN-QUALITY LENS. Without it, every lens in this ring is an ENGINEERING-CORRECTNESS
+    // lens (pair / correctness / conventions+tests) — so no layer of the review ring was ever
+    // responsible for whether the screen was any good, and UI quality was never a condition of
+    // green. Now: an OBSERVABLE change gets a 4th lens that runs the deterministic judge first and
+    // then applies the [JUDGMENT] rules of DESIGN_RULEBOOK.md. It does not pass, it does not commit.
+    const reviewPlan = [
+      ...(OBSERVABLE_DQ ? [{ kind: 'design-quality', run: () => agent(
+        `Fresh-context DESIGN-QUALITY review. You look ONLY at the UI this change affects and at the rulebook — never at the author's reasoning.
+FOLDER: ${folder}\nTASK: ${t.task}\nIMPLEMENTATION REPORT: ${JSON.stringify(impl)}
+
+THE RULEBOOK IS THE ONLY CRITERION (do not invent your own): read DESIGN_RULEBOOK.md at the repo
+root. Every finding MUST cite a rule id (E-01) — a finding that cannot cite one is not a defect;
+either propose a rule or let it pass.
+⚠️ Rule ids may ONLY come from these ${RULE_IDS.size} (validated in code — anything else is dropped):
+${RULE_ID_LIST}
+Need a new rule? Write "propose a new rule: <text>" and cite E-01. Do NOT mint an id here; a new
+rule must land in DESIGN_RULEBOOK.md before it can be cited.
+
+STEP 1 — run the deterministic judge (the referee, not an opinion; do NOT skip it):
+    node standup/control/verify_design_quality.js <url of the page this change affects> --json /tmp/dq-${dev.id}.json
+  ${DESIGN_URL ? `URL to judge: ${DESIGN_URL} (navigate to the affected route).` : 'Derive the running instance URL from the project\'s own run method and START it if needed.'}
+  Record the exit code + per-rule counts in machine_gate.
+  Exit 0 = no violations · 1 = violations · 2 = could not load the page or launch the browser.
+  Exit 2 means the gate DID NOT RUN — that is pass=false with the reason, never a wave-through.
+
+STEP 2 — judge the [JUDGMENT] rules the script cannot decide (B-03 color semantics, B-04 factory
+  defaults, B-05 indistinguishable near-duplicates, C-01 single focus, C-02 empty de-emphasis,
+  C-04 designed empty states, D-02 numeral typography, D-04 title/state separation) from a REAL
+  screenshot. Cite a rule id on every conclusion.
+
+STEP 3 — E-02: any rule id cited >=2 times means per-file tickets are FORBIDDEN. Say so in the
+  verdict, and name where the shared component to change lives.
+
+**pass is ASYMMETRIC (DESIGN_RULEBOOK E-07 — do NOT collapse it to "exit code 0 means pass"):**
+- exit code NON-ZERO → pass MUST be false. That is the floor, and it is enforced in code.
+- exit code 0 → **proves nothing** and is not a reason to pass. You still owe an independent
+  judgment. Evidence: a page passed EVERY machine rule — geometry clean, aspect ratios exact —
+  and was scored 2/10, worse than a visibly mangled page at 4/10, because its ten small-multiple
+  charts were each normalized PER CARD: a value of 9 and a value of 63 were drawn at the same
+  height, and two adjacent cards drew 58 at the bottom and 51 at the top, inverting the real
+  ranking. The machine check was silent throughout.
+  **The gate catches "looks wrong"; it is blind to "looks right, is lying."**
+  So ask explicitly: could this screen lead someone to a conclusion the data does not support?
+  (Usual shapes: per-card-normalized small multiples, evenly-spaced points posing as a time axis,
+   percentages with no denominator, missing values ranked as if they were real categories, n=2
+   drawn like n=1000, clipped data points with no indication.)
+- any A- or B-class [JUDGMENT] violation → pass=false.
+
+Do not pad the list with non-UI nitpicking. And do NOT wave something through because "it is
+pre-existing, not from this change" — E-05: the gate judges the CURRENT state of the surface,
+independent of who wrote it or what changed.`,
+        { label: `review:${dev.id}:design-quality`, phase: 'Work', effort: E_JUDGE, schema: DESIGN_REVIEW_SCHEMA }
+      ) }] : []),
       // pair review of the actual DIFF — the lanemate who challenged the plan now reviews the real change
-      () => agent(
+      { kind: 'pair', run: () => agent(
         `You are "${lanemate.id}" (${lanemate.role}), the PAIR of "${dev.id}". You challenged the PLAN earlier; now review the ACTUAL DIFF — did the implementation do what the approved plan said, without regressions or scope creep?
 FOLDER: ${folder}\nTASK: ${t.task}\nAPPROVED PLAN: ${JSON.stringify(plan)}\nTEST GATE: ${JSON.stringify(dq)}
 Read the real working-tree diff (git -C ${folder} diff -- . ; plus untracked files in the report). pass=false if it diverges from the plan, regresses, or a blocking defect exists.`,
-        { label: `pair-review:${lanemate.id}`, phase: 'Work', schema: REVIEW_SCHEMA }
-      ),
+        { label: `pair-review:${lanemate.id}`, phase: 'Work', effort: E_JUDGE, schema: REVIEW_SCHEMA }
+      ) },
       // two fresh-context lenses — only the diff + criteria, no prior context
-      ...['correctness', 'conventions-and-tests'].map(lens => () =>
+      ...['correctness', 'conventions-and-tests'].map(lens => ({ kind: lens, run: () =>
         agent(
           `Fresh-context adversarial review, ${lens} lens. You see only the diff and criteria — not the writer's reasoning. Find defects that AFFECT CORRECTNESS or violate conventions/test requirements; do not pad with non-blocking nits as blockers.
 FOLDER: ${folder}\nTASK: ${t.task}\nAPPROVED PLAN: ${JSON.stringify(plan)}\nIMPLEMENTATION REPORT: ${JSON.stringify(impl)}\nTEST GATE: ${JSON.stringify(dq)}
 Read the ACTUAL working-tree diff (git -C ${folder} diff -- . ; plus untracked files listed in the report). VERIFY the test gate ran + supports passed. pass=false if any blocking defect.`,
-          { label: `review:${dev.id}:${lens}`, phase: 'Work', schema: REVIEW_SCHEMA }
-        )),
-    ])).filter(Boolean)
+          { label: `review:${dev.id}:${lens}`, phase: 'Work', effort: E_JUDGE, schema: REVIEW_SCHEMA }
+        ) })),
+    ]
+    const reviews = (await parallel(reviewPlan.map(l => l.run))).filter(Boolean)
     record.reviews = reviews
-    const green = reviews.length === 3 && reviews.every(r => r.pass)
+
+    // E-07 ENFORCED IN CODE, not just asked for in the prompt. The whole point of "let scripts be
+    // the referee" is that the exit code must not be RELAYED by a model that can decide to be
+    // lenient about it. Non-zero exit (or a judge that never ran) => pass is forced false. Exit 0
+    // is deliberately NOT forced true: it proves nothing, so the model's judgment still governs.
+    const _dqReview = reviews.find(r => r && r.machine_gate)
+    if (_dqReview) {
+      const mg = _dqReview.machine_gate || {}
+      if (!mg.ran || typeof mg.exit_code !== 'number' || mg.exit_code !== 0) {
+        if (_dqReview.pass) {
+          log(`  design gate OVERRIDE: lens said pass but the judge exited ${mg.ran ? mg.exit_code : '(never ran)'} — forcing pass=false (E-07: a non-zero exit always fails)`)
+        }
+        _dqReview.pass = false
+      }
+      // E-01 admission: a finding citing an id absent from DESIGN_RULEBOOK.md is dropped here and
+      // never reaches the log/backlog queue. pass/green is deliberately untouched by this — it is
+      // bound to the judge's exit code, not to how well the findings were labelled.
+      const _adm = admitByRule(_dqReview.findings, `design-quality finding(s) on ${dev.id}`)
+      _dqReview.findings = _adm.kept
+      if (_adm.rejected.length) record.design_findings_inadmissible = _adm.rejected
+      record.design_gate = mg
+      // E-02: bank the systemic violations separately so they queue as "change the shared
+      // component", not as yet another per-file ticket that sinks to the bottom of the board.
+      if (Array.isArray(_dqReview.systemic) && _dqReview.systemic.length) record.design_systemic = _dqReview.systemic
+    }
+
+    // Green is derived from the lenses ACTUALLY PLANNED for this task — never a hardcoded count.
+    // A hardcoded 3 is how a 4th lens gets added and silently ignored (or worse, how adding one
+    // makes green unreachable).
+    const green = reviews.length === reviewPlan.length && reviews.every(r => r.pass)
     record.green = green
+    log(`  review ${reviews.filter(r => r.pass).length}/${reviewPlan.length} pass (${reviewPlan.map(l => l.kind).join(', ')})` +
+      (green ? ' → GREEN' : ` → blocked by: ${reviews.filter(r => !r.pass).map(r => String(r.verdict || '').slice(0, 60)).join(' | ').slice(0, 160)}`))
 
     // -- 5 COMMIT on green (feature branch, no push) --
     if (green && isGit && impl.files_changed && impl.files_changed.length) {
       record.committed = await agent(
-        `The change in ${folder} PASSED plan-challenge, the test gate, and all three reviews. Commit it:
+        `The change in ${folder} PASSED plan-challenge, the test gate, and all ${reviewPlan.length} reviews. Commit it:
 - branch: create ${impl.branch || 'auto/standup-<short-slug>'} from the current default branch. Commit this task's edits onto that fresh feature branch.
 - stage ONLY: ${JSON.stringify(impl.files_changed)} (never git add -A; NEVER stage .standup/ progress files)
 - commit message: ${impl.commit_message || '(write a clear conventional message)'}
 Do NOT push/merge/deploy. Report commit hash + branch.`,
-        { label: `commit:${dev.id}`, phase: 'Work', schema: WORK_SCHEMA }
+        { label: `commit:${dev.id}`, phase: 'Work', effort: E_MECH, schema: WORK_SCHEMA }
       )
       // -- 6 SUPERVISOR final review (of the COMMITTED diff — the last gate before it's called done) --
       if (record.committed && record.committed.status === 'committed') {
@@ -420,7 +760,7 @@ Do NOT push/merge/deploy. Report commit hash + branch.`,
           `You are the autonomous SUPERVISOR. FINAL review of the COMMITTED change in ${folder} before it is called done — the last gate. Read the committed diff (git -C ${folder} show HEAD -- .).
 TASK/GOAL: ${t.task}\nPlan it was meant to deliver: ${JSON.stringify(plan)}\nReview verdicts: ${JSON.stringify(reviews.map(r => r.verdict))}
 approve=false (with must_fix) if it does not deliver the goal, a gate was rubber-stamped, the wrong files were staged, or the commit is not what the reviews approved.`,
-          { label: `sup:final:${dev.id}`, phase: 'Work', schema: SUP_SCHEMA }
+          { label: `sup:final:${dev.id}`, phase: 'Work', effort: E_JUDGE, schema: SUP_SCHEMA }
         )
       }
     }
@@ -428,39 +768,23 @@ approve=false (with must_fix) if it does not deliver the goal, a gate was rubber
     record.status = (record.supervisor_final && record.supervisor_final.approve === false) ? 'supervisor-rejected'
       : (record.committed && record.committed.status === 'committed') ? 'committed'
       : (green ? 'green-not-committed' : 'review-failed')
+    log(`  → ${record.status}${record.committed && record.committed.commit ? ` ${record.committed.commit}` : ''}${record.committed && record.committed.branch ? ` @${record.committed.branch}` : ''}`)
     worked.push(record)
    } catch (e) {
       // A single agent({schema}) throw must NOT abort the whole tick — record + continue.
+      log(`  → work-error: ${String((e && e.message) || e).slice(0, 140)}`)
       worked.push({ task: t.task, assignee: t.assignee, team: t.team, status: 'work-error', error: String((e && e.message) || e) })
    }
   }
 }
 
-// ---- Phase 5: DESIGN (morning only, args.design) — design_lead on the portal UI ----
-let design = null
-if (DO_DESIGN) {
-  phase('Staff Pulse')
-  const lead = STAFF.find(s => /design/i.test(s.role || ''))
-  if (lead) {
-    design = await agent(
-      `You are "${lead.id}" — ${lead.role} for the Mission Control portal (pairs with portal_frontend). Date ${DATE}. Be demanding, not polite.
-YOUR RUBRIC: ${lead.rubric || 'Apple HIG: clarity, deference, depth + the states hover/focus/loading/error/empty.'}
-Loop:
-1. Read standup/portal/.standup/${lead.id}.md (your progress file) if present.
-2. Get the CURRENT portal UI: read standup/portal/static/index.html + app.css + app.js (and screenshot the live page at http://127.0.0.1:8770 if the portal is running).
-3. Critique strictly against YOUR rubric; score 1-10.
-4. Produce a RANKED design-task list (P0-P2, S/M/L) with concrete file-level fixes; autoworkable=true ONLY for pure CSS/layout with no behavior change.
-5. Append a dated entry to your progress file. Do NOT implement here — tasks enter the gate chain next tick.`,
-      { label: `design:${lead.id}`, phase: 'Staff Pulse', schema: {
-        type: 'object', required: ['summary', 'tasks'], properties: {
-          summary: { type: 'string' }, score: { type: 'number' },
-          tasks: { type: 'array', items: { type: 'object', required: ['task', 'priority', 'effort'], properties: {
-            task: { type: 'string' }, priority: { type: 'string', enum: ['P0', 'P1', 'P2'] },
-            effort: { type: 'string', enum: ['S', 'M', 'L'] }, files: { type: 'string' },
-            autoworkable: { type: 'boolean' } } } } } } }
-    )
-  }
-}
+// NOTE: the DESIGN phase used to live HERE, after Work — see Phase 2b above for why it moved.
+// A design critique that runs after the commit cannot block anything, which is the entire reason
+// the same defects survived tick after tick.
+
+log(`TICK DONE ${DATE} — ${worked.filter(Boolean).filter(w => w.status === 'committed').length} committed / ` +
+  `${worked.filter(Boolean).filter(w => w.green).length} green of ${worked.filter(Boolean).length} worked · ` +
+  `board ${((board && board.todays_board) || []).length} item(s) · design ${design ? `${DESIGN_TASKS.length} task(s) boarded` : 'no design lead active'}`)
 
 return {
   date: DATE,
@@ -483,5 +807,12 @@ return {
     worked: worked.filter(Boolean).length,
     green: worked.filter(Boolean).filter(w => w.green).length,
     committed: worked.filter(Boolean).filter(w => w.status === 'committed').length,
+    design_tasks_boarded: DESIGN_TASKS.length,
+    design_gated: worked.filter(Boolean).filter(w => w.design_gate).length,
   },
+  // Rule ids cited anywhere this tick that are NOT defined in DESIGN_RULEBOOK.md. Empty means the
+  // citation discipline held. Non-empty means: land the rule (with a real recorded violation, per
+  // E-03) or stop citing it — an id nobody has agreed to is not a rule.
+  rulebook_proposals: RULEBOOK_PROPOSALS,
+  rulebook_source: RULE_IDS_SOURCE,
 }

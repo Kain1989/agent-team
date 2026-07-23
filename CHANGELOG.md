@@ -3,6 +3,103 @@
 All notable changes to the **agent-team** plugin. Format: [Keep a Changelog](https://keepachangelog.com/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.5] — 2026-07-23
+
+**A design gate — so someone in the pipeline is responsible for whether the screen is any good.**
+
+### The problem this solves
+
+You can run every gate in this plugin, pass all of them, and still ship an ugly, misleading
+screen. Three failures compound:
+
+1. **Every review lens was an engineering-correctness lens.** The ring was pair-diff +
+   correctness + conventions-and-tests. All three ask "is this code right?" None asks "is this
+   screen any good?" So UI quality was never a condition of green — not because anyone decided
+   it shouldn't be, but because no role owned it.
+2. **The design critique ran *after* the commit.** It was the last phase, downstream of Work.
+   By the time it produced a verdict the code was already committed, so it was physically
+   incapable of blocking anything. It was a report, not a gate.
+3. **Its output went to a file the only dev who could act on it never read.** Findings were
+   appended to the design lead's progress file as prose. Prose can't be cited, so a finding
+   couldn't become a queue item — the same defects were re-discovered tick after tick and
+   nothing landed. Anthropic calls this *quiet divergence*.
+
+The fix is not "review harder". A **rubric** is a lens; a **rulebook** is a language. Findings
+now cite numbered rules, machine-checkable rules are decided by a script's exit code, and the
+whole thing runs where it can still say no.
+
+### Added
+- **[`DESIGN_RULEBOOK.md`](DESIGN_RULEBOOK.md)** at the repo root — numbered, citable rules:
+  A (accessibility/operability), B (data-viz integrity), C (layout/hierarchy), D (typography),
+  plus `E-01`–`E-07` meta-rules that govern the loop itself. Each rule is marked `[MACHINE]`
+  (decided by a script) or `[JUDGMENT]` (decided by the design lens). Every rule came from a
+  real recorded violation, not from theory.
+- **A deterministic judge** — `standup/control/verify_design_quality.js`. Drives the live page
+  with Playwright and returns an **exit code**: 0 no violations · 1 violations · 2 could not run.
+  Implements all ten `[MACHINE]` rules (focus visibility, touch targets, contrast, error
+  boundaries, chart axes, isotropic rendering, panel content fill, type scale, emoji headings).
+  `--rule-ids` prints the citable ids; `--rules` hard-fails on an id that isn't in the rulebook
+  (a typo used to silently skip the rule and report a false green).
+- **`--self-test` and its deliberately broken fixture** (`standup/control/fixtures/`) — proves
+  the judge FAILS on planted violations, covering every `[MACHINE]` rule. Required by `E-03`:
+  *a judge that can't catch breakage isn't a judge*, and every design verdict is unreliable
+  until the judge can fail. Wired into CI.
+- **A 4th review lens, `design-quality`**, added to the review ring whenever the change has an
+  **observable surface** (detected from the lane/task text *and* the files actually changed, so
+  a backend lane whose change alters what renders can't opt out). It runs the judge first, then
+  applies the `[JUDGMENT]` rules to a real screenshot.
+  - **`pass` is bound to the judge's exit code in code, not in the prompt.** A non-zero exit
+    forces `pass=false` even when the lens argues otherwise — the point of a mechanical referee
+    is that its verdict isn't relayed by something that can decide to be lenient.
+  - **`E-07`: exit 0 proves nothing.** The judge catches "looks wrong" and is blind to "looks
+    right, is lying" — a page whose small-multiple charts are each normalized *per card* renders
+    flawlessly while inverting the true ranking. So exit 0 is deliberately *not* forced to pass;
+    an independent UX judgment still has to agree.
+- **`E-01` enforced by existence, not presence.** Every design finding must cite a rule id *and*
+  that id must exist in `DESIGN_RULEBOOK.md`. Ids cited but undefined are dropped from the queue
+  and reported as `rulebook_proposals` — a new rule is proposed, queued and landed, never minted
+  at the point of use.
+- **Effort tiering** (`opts.effort`, previously used zero times — every agent in a run executed at
+  one depth): `low` for mechanical evidence-gathering (standup reports, pulse, investigate,
+  commit), `high` for judgment (all reviews, design, board synthesis, plan/challenge, the
+  test-gate honesty check), `xhigh` for implementation. Squad sync, comms triage and the test gate
+  are documented in-file as deliberately left inheriting, so the omissions don't read as oversights.
+- **Conclusion-carrying narration.** The run was near-silent on the happy path — an hour of
+  progress tree with no content. Every phase boundary now logs its **conclusion with the number
+  that matters**: squad health, board size and P0 count, design score + violation count, the work
+  queue, per-task plan/test-gate/review outcomes with the blocking verdict quoted, and the final
+  tally. Never "starting X".
+- **`standup/control/check_workflow_parse.js`** — catches the breakage class `node --check` misses.
+  An unescaped backtick in a prompt ends the template literal early; the remainder often still
+  parses, so `node --check` passes while the Workflow engine refuses to load the file and the next
+  scheduled run dies silently at startup. This simulates the real harness instead.
+
+### Changed
+- **The design phase moved from last to before board synthesis.** Its tasks now land on *this*
+  tick's board as queue items carrying their rule ids, instead of in a progress file. The design
+  lead's every-tick pulse switched from re-reviewing the UI to tracking **delivery** — which
+  rule-cited task is on its Nth tick without a commit.
+- **`green` is derived from the lenses actually planned for the task**, not a hardcoded count of 3
+  — which is exactly how a 4th lens gets added and silently ignored.
+- **The design lead's deliverable is a design, not a defect list.** The schema now requires purpose,
+  layout, states and *what to delete*: a PM/UX who only vetoes at a checkpoint adds nothing.
+- **The gate binds on every dispatch path**, not just the workflow: `standup/team.json`'s
+  `sdlc_pipeline` step 5 (the canonical review contract, which `/standup` and `/work` receive
+  verbatim and `/team`'s teammate definitions are generated from) now carries the design lens, and
+  the generated `.claude/agents/*.md` carry it too. An improvement that lands on one path while the
+  others run the old shape is the quiet divergence above, wearing a different mask.
+- The **visual/E2E** requirement in the test gate is now mandatory (not conditional prose) for an
+  observable change, and the supervisor rejects unit tests, HTTP 200s or a prior screenshot offered
+  as visual proof.
+
+### Notes for adopters
+- The judge needs Playwright (`npm i -D playwright && npx playwright install chromium`). If it
+  isn't importable the judge exits **2**, never 0 — an unrunnable gate must not report "no violations".
+- **The URL is a parameter**, never a baked-in default: pass `args.designUrl`, or let the agent
+  derive it from your project's run method. Point it at your own instance.
+- Keep the rule ids, replace the examples. Ids are the shared vocabulary of your reviewers, your
+  board and the judge — renumber them everywhere at once or not at all.
+
 ## [0.3.4] — 2026-07-14
 
 Complete the gated SDLC — add the gates the Work pipeline was missing (it went

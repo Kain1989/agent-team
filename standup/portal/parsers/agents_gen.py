@@ -54,8 +54,20 @@ def _agent_md(member: Dict[str, Any], squad: Optional[Dict[str, Any]]) -> str:
         body.append(f"Test gate: {member['tests']} — the suite must actually RUN and pass before "
                     "you call work done.")
     body.append("Follow the gated SDLC: plan first (no code), let your pair challenge it, implement + "
-                "write/extend tests, then a 2-lens review, and commit on green to a feature branch. "
-                "Never push, merge, or deploy.")
+                "write/extend tests, then the fresh-context review ring, and commit on green to a "
+                "feature branch. Never push, merge, or deploy.")
+    # The design gate has to reach THIS dispatch path too. An improvement that lands only in the
+    # workflow, while /team keeps running the old shape, is the quiet divergence the rulebook's
+    # E-02/E-05 exist to stop — so the teammate definition carries the same contract.
+    body.append(
+        "DESIGN GATE — if your change has an OBSERVABLE surface (a page, chart, panel, or rendered "
+        "output), it is NOT green until a design-quality review passes as well: run "
+        "`node standup/control/verify_design_quality.js <url of the affected page>` against the live "
+        "instance (the exit code is the verdict), then judge the [JUDGMENT] rules of "
+        "DESIGN_RULEBOOK.md. Cite a rule id on every finding (E-01). A non-zero exit always fails; "
+        "exit 0 proves NOTHING on its own (E-07) — the judge catches 'looks wrong' and is blind to "
+        "'looks right, is lying'. One rule cited twice is a shared-component fix, not two tickets (E-02)."
+    )
     for extra in ("charter", "rubric"):
         if member.get(extra):
             body.append(str(member[extra]))

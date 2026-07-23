@@ -27,3 +27,16 @@ jobs:
       - name: demo-app test suite
         working-directory: demo-app
         run: pip install pytest && python -m pytest -q
+
+      - name: Workflow parse check
+        # `node --check` PASSES on an unescaped backtick that truncates a prompt template, so it
+        # cannot catch the failure where the engine refuses to load the workflow. This can.
+        run: node standup/control/check_workflow_parse.js standup/standup.workflow.js
+
+      - name: Design judge self-test
+        # DESIGN_RULEBOOK E-03: prove the judge FAILS on deliberately broken UI. A design gate
+        # that has never been shown to fail is not a gate — every verdict it gives is unreliable.
+        run: |
+          npm install --no-save playwright
+          npx playwright install --with-deps chromium
+          node standup/control/verify_design_quality.js --self-test

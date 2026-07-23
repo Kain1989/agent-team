@@ -18,14 +18,14 @@
         "2 PLAN CHALLENGE — the pair critiques the plan in a FRESH context: direction, scope, risks, tests; one revision cycle, then escalate (never loop)",
         "3 IMPLEMENT — per the approved plan, ONE task at a time; write/extend unit + integration tests; update the dev's progress file",
         "4 TEST GATE — the suite must actually RUN and pass; exact commands recorded (deterministic gates compensate for same-family judge bias)",
-        "5 REVIEW — 2 parallel fresh-context reviewers (correctness lens; conventions+tests lens); the writer never grades own work",
+        "5 REVIEW — parallel fresh-context reviewers; the writer never grades own work. BASE LENSES (always): correctness; conventions+tests. **PLUS a DESIGN-QUALITY lens whenever the change has an OBSERVABLE surface.** Without it every lens in the ring is an ENGINEERING-CORRECTNESS lens, so no layer is responsible for whether the screen is any good — and a design critique that runs after the commit cannot block anything. The design lens judges against DESIGN_RULEBOOK.md: numbered, citable rules; every finding MUST cite a rule id (E-01) and the id must EXIST in the rulebook. It first runs the deterministic judge `node standup/control/verify_design_quality.js <live url>` — the exit code IS the verdict, and it ships with `--self-test` proving it FAILS on deliberately broken UI (E-03) — then judges the [JUDGMENT] rules. E-07: a machine PASS proves NOTHING. A non-zero exit always fails, but exit 0 is not a pass: the judge catches 'looks wrong' and is blind to 'looks right, is lying'. E-02: one rule cited >=2 times is a SHARED-COMPONENT fix, never N per-file tickets. E-05: the gate judges the surface’s CURRENT state — not the diff, not who wrote it. THIS APPLIES ON EVERY DISPATCH PATH — /standup, /work, /team, and any ad-hoc task. An improvement that lands on only one path is exactly the quiet divergence this rule exists to stop.",
         "6 COMMIT on green — feature branch, stage ONLY the task files (in the code-task path this is the human-approved worktree commit)",
         "7 PR/PUSH — optional; off by default in the MVP (the demo-app has a LOCAL origin, no network remote)",
         "8 MERGE — human-gated; left to you in your own checkout",
         "9 DEPLOY — out of scope for the MVP demo-app"
       ],
       "gated_requires_approval": ["the code-task commit (portal Approve)", "any push/merge/deploy", "credentials/secrets", "destructive ops", "repeated-failure tasks (2 consecutive red reviews -> escalate, do not loop)"],
-      "review_rule": "Writer and reviewer are never the same context. Reviewers see diff + criteria, not the writer's reasoning. Structured critique, NOT free-form debate. Deterministic test gates compensate for same-family judge bias."
+      "review_rule": "Writer and reviewer are never the same context. Reviewers see diff + criteria, not the writer's reasoning. Structured critique, NOT free-form debate. Deterministic test gates compensate for same-family judge bias. Green is derived from the lenses actually planned for the task, never a hardcoded lens count."
     },
     "persistence": {
       "per_dev_progress": "<folder>/.standup/<dev_id>.md — appended each work session (done / state / next / questions); read at every standup + before every plan. Never staged into commits.",

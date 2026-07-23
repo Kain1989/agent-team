@@ -101,7 +101,16 @@ worktree → review the diff → **Approve** → commit. (Details: `standup/port
    always; **integration** tests when the project has a suite; **visual/E2E** live verification
    when the task changes UI (the real running instance, not an HTTP 200 or a screenshot).
 5. **Review** — the pair reviews the actual **diff**, plus 2 fresh-context lenses (correctness;
-   conventions+tests). The writer never grades own work.
+   conventions+tests) — **plus a `design-quality` lens whenever the change has an OBSERVABLE
+   surface**. Without that 4th lens every lens in the ring is an engineering-correctness lens, so
+   nothing in the pipeline is responsible for whether the screen is any good. It judges against
+   [`DESIGN_RULEBOOK.md`](DESIGN_RULEBOOK.md) (numbered, citable rules — every finding must cite a
+   rule id that EXISTS in the file, `E-01`), running the deterministic judge
+   `node standup/control/verify_design_quality.js <live url>` first — the exit code is the verdict,
+   bound in code — then the `[JUDGMENT]` rules. ⚠️ `E-07`: a non-zero exit always fails, but **exit
+   0 proves nothing** — the judge catches "looks wrong" and is blind to "looks right, is lying".
+   The writer never grades own work, and `green` is derived from the lenses actually planned for
+   the task — never a hardcoded count.
 6. **Commit on green** — feature branch, stage only the task's files (never `git add -A`,
    never the `.standup/` progress files).
 7. **Supervisor final review** — the supervisor signs off on the committed diff before it is
@@ -110,7 +119,28 @@ worktree → review the diff → **Approve** → commit. (Details: `standup/port
 
 Doctrine: divide by responsibility (not debate), pairs *critique* (free-form debate
 degrades quality), deterministic test gates, name experts only for alignment tasks, human
-gates on irreversible actions. Full rationale + policy in `standup/team.json`.
+gates on irreversible actions. Full rationale + policy in `standup/team.json` — its
+`manager.policy.sdlc_pipeline` step 5 is the **canonical review contract**, and it binds on every
+dispatch path (`/standup`, `/work`, `/team`). An improvement that lands on one path while the
+others run the old shape is quiet divergence; fix the contract, not one caller.
+
+## The design gate
+
+The design pass runs **before board synthesis**, not after Work. This is not cosmetic: while it
+ran last, the code was already committed by the time it spoke, so it could not block anything, and
+its findings went into a progress file the one developer who could act on them never read. Now its
+tasks land on **this** tick's board carrying their rule ids.
+
+- `DESIGN_RULEBOOK.md` (repo root) — A/B/C/D rules + `E-01`..`E-07` meta-rules. `[MACHINE]` rules
+  are decided by a script's exit code; `[JUDGMENT]` rules by the design lens reading a real screenshot.
+- `standup/control/verify_design_quality.js` — the judge. `--self-test` proves it FAILS on a
+  deliberately broken fixture (`E-03`: a judge that can't catch breakage isn't a judge); `--rule-ids`
+  prints the citable ids. It needs Playwright, and exits **2** rather than 0 if it cannot run.
+- The target URL is a **parameter** (`args.designUrl`), never a baked-in default.
+- `E-02`: a rule cited twice is a shared-component fix, never N per-file tickets.
+- Run `node standup/control/check_workflow_parse.js standup/standup.workflow.js` after editing any
+  workflow file — `node --check` PASSES on an unescaped backtick that truncates a prompt template
+  and stops the engine from loading, so it is not sufficient.
 
 ## The work target: `demo-app/`
 

@@ -109,6 +109,50 @@ and the portal observes live native teams at `GET /api/native-teams`. Enable nat
 
 ---
 
+## The design gate — someone is responsible for whether the screen is any good
+
+Every other lens in the review ring is an *engineering-correctness* lens: pair-diff, correctness,
+conventions-and-tests. All three ask whether the code is right. None asks whether the screen is
+any good — so UI quality was never a condition of green, and a design critique that ran after the
+commit could not block anything anyway.
+
+So the pipeline carries a **fourth lens**. Whenever a change has an **observable surface**, it does
+not go green until `design-quality` passes:
+
+```bash
+# the deterministic judge — the exit code IS the verdict, not an opinion
+node standup/control/verify_design_quality.js http://127.0.0.1:8770
+#   0 = no violations   1 = violations   2 = could not run (never a silent pass)
+
+node standup/control/verify_design_quality.js --self-test   # prove the judge can FAIL
+node standup/control/verify_design_quality.js --rule-ids    # the citable rule ids
+```
+
+- **[`DESIGN_RULEBOOK.md`](DESIGN_RULEBOOK.md) is the criterion** — numbered rules, not prose. A
+  rubric is a lens; a rulebook is a language. **Every finding must cite a rule id, and the id must
+  exist in the file** (`E-01`) — otherwise a finding can't become a queue item, and the same
+  defects get re-found every tick and never land.
+- **`[MACHINE]` rules are decided by the script**, `[JUDGMENT]` rules by the design lens reading a
+  real screenshot. `pass` is bound to the exit code **in code**, not merely requested in a prompt.
+- **The judge is itself tested** (`E-03`): `--self-test` runs it against a deliberately broken
+  fixture and fails if any rule stays silent. A judge that can't catch breakage isn't a judge.
+- **`E-07`: a machine PASS proves nothing.** A non-zero exit always fails, but exit 0 is not a
+  pass — the judge catches "looks wrong" and is blind to "looks right, is lying". (A page whose
+  small-multiple charts are each normalized *per card* renders flawlessly and inverts the real
+  ranking; every machine rule was silent on it.)
+- **`E-02`: one rule cited twice is a shared-component fix**, never N per-file tickets.
+
+The design pass runs **before** the board is synthesized, so its findings become ranked queue items
+for this tick instead of notes in a file nobody reads. The gate applies on **every** dispatch path
+— `/standup`, `/work` and `/team` — because an improvement that lands on one path while the others
+run the old shape is the exact failure the rulebook exists to stop.
+
+**Adopting it:** the judge needs Playwright (`npm i -D playwright && npx playwright install
+chromium`); if it can't run it exits 2, never 0. Pass the target as `args.designUrl` — the URL is a
+parameter, never a baked-in default. Keep the rule ids, replace the examples with your own.
+
+---
+
 ## The team
 
 | | who | works on |
@@ -127,12 +171,15 @@ run the team: [`CLAUDE.md`](CLAUDE.md).
 ```
 agent-team/
 ├── CLAUDE.md           how Claude Code runs the team (read on open)
+├── DESIGN_RULEBOOK.md  the numbered design rules the design gate judges against
 ├── .claude/commands/   /standup (run the squad) · /portal (start Mission Control)
 ├── standup/            the engine
 │   ├── team.json       the roster — 2 squads + lean staff
 │   ├── standup.workflow.js   the gated SDLC standup the Workflow tool runs
 │   ├── portal/         Mission Control: FastAPI API + a no-build static UI
-│   └── control/        the job queue, git-worktree lifecycle, and the locked-down gate
+│   └── control/        the job queue, git-worktree lifecycle, the locked-down gate,
+│                       verify_design_quality.js (the design judge + its self-test),
+│                       and check_workflow_parse.js
 ├── demo-app/           the sample project the team works on (textkit; local git on first run)
 └── setup.sh            installs the portal (venv, deps, gate config, demo-app git)
 ```
@@ -154,8 +201,10 @@ has an `origin` remote, then run `/standup` or submit a code task targeting `pro
 ## Tests
 
 ```bash
-cd standup/portal && ../.venv/bin/python -m pytest -q     # portal engine: 180 passing
+cd standup/portal && ../.venv/bin/python -m pytest -q     # portal engine: 185 passing
 cd demo-app && python3 -m pytest -q                       # the sample lib
+node standup/control/verify_design_quality.js --self-test # the design judge can still FAIL (E-03)
+node standup/control/check_workflow_parse.js standup/standup.workflow.js   # the workflow still loads
 ```
 
 ## Platform & project
