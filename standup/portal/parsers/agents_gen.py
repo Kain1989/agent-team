@@ -20,9 +20,12 @@ _HEADER = "<!-- generated from team.json by /sync-roster — do not edit by hand
 
 
 def _tools_for(member: Dict[str, Any]) -> str:
-    """Read-only roles (non-git staff) get the read tools; developers also get edit + bash."""
+    """Developers (git) get edit + bash; a role that must OPERATE the product (needs_bash, e.g.
+    product_qa driving a browser) gets read + bash but not edit; everyone else gets read-only."""
     if member.get("git", False):
         return "Read, Grep, Glob, LS, Edit, Write, Bash"
+    if member.get("needs_bash", False):
+        return "Read, Grep, Glob, LS, Bash"
     return "Read, Grep, Glob, LS"
 
 
@@ -41,6 +44,14 @@ def _agent_md(member: Dict[str, Any], squad: Optional[Dict[str, Any]]) -> str:
         fm.append(f"model: {member['model']}")
 
     body: List[str] = [_HEADER, "", f'You are "{name}" — {role} on the {squad_name}.']
+    # Persona FIRST — a second-person identity instruction goes BEFORE the operational checklist
+    # (squad/lane/pair/SDLC/design-gate/charter below), because a persona placed after a checklist is
+    # a persona that does not exist. This is the same contract the workflow's personaOf() enforces, so
+    # the /team dispatch path does not run a persona-less shape while the workflow injects one.
+    if member.get("persona"):
+        body.append("")
+        body.append(str(member["persona"]))
+        body.append("")
     if mission:
         body.append(f"Squad mission: {mission}")
     if focus:

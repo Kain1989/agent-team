@@ -3,6 +3,81 @@
 All notable changes to the **agent-team** plugin. Format: [Keep a Changelog](https://keepachangelog.com/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.6] — 2026-07-24
+
+**The team could run every gate and still find nothing wrong — because no role was structurally able to.**
+
+### The problem this solves
+
+A gated SDLC with many agents can still miss an obvious, visible product defect. Not from
+negligence — from role definition:
+
+1. **A developer's standup schema only asked about progress.** Its required fields were all
+   progress (project / health / done / next / blockers); none asked "what did you see that's
+   wrong". Worse, the standup prompt told the dev to scope the report to their own lane, so
+   cross-lane observation was explicitly *forbidden*. A real company's developer catches a defect
+   the PM missed *because they use the product*; ours cold-started each tick, read its own
+   progress file, and was asked one thing: how is your task going.
+2. **The PM/UX persona was a name tag, never an instruction.** The only "personality" a staff
+   agent actually received was the ~40-character string in its `role` field, buried under a much
+   longer charter + rubric and a schema whose required fields were all rule ids. A Jobs-style
+   judgment like "this whole page shouldn't exist" has no rule id, so under the team's own `E-01`
+   ("a finding without a rule id doesn't enter the queue") it was dropped — the persona was
+   structurally excluded from the one output that counted.
+3. **The rulebook was authored entirely by the supervisor.** Supervisor writes the rules → the
+   rules admit only findings citing those rules → agents can only find defects the supervisor
+   already named. The team's cognition was bounded by the supervisor's.
+4. **No role ever USED the product.** The design lead judged expert standards, the PM judged
+   keep/kill, reviewers read the diff. None of them opened the product and tried to get a real task
+   done — which is exactly why a visible defect could sit until a human happened to open it.
+
+### Added
+- **A discovery channel for developers** — `observations[]` on the standup report schema
+  (`what` / `where` / `why_it_matters` / `outside_my_lane`). The dev prompt now explicitly asks
+  for it and declares it **not lane-limited**; the old "scope this report to your lane" rule is
+  narrowed to the *progress* part only. Reverse constraint: saw nothing → empty array, never
+  invent to fill it.
+- **`judgments[]`** on the design/PM schema — an independent-judgment channel that needs **no
+  rule id**. Whole-surface calls ("this shouldn't exist", "these pages aren't one product") go
+  here, scoped `view` / `surface` / `product` / `company`, on the one condition that they state
+  what *should* be. `E-01` gains a branch: judgment-level conclusions are not bound by the
+  cite-a-rule rule. Every `[MACHINE]` rule is single-page in scope, so a cross-page judgment is
+  one only a human role can make.
+- **A `product_qa` role** — the one role whose whole job is to USE the product as a user every
+  tick (Playwright/curl), running real end-to-end tasks and reporting where it breaks. Its only
+  criterion is "can I get the thing done"; "I don't understand this screen" is a complete report
+  on its own; it spans every UI and belongs to no lane; it is forbidden from inventing problems
+  to hand something in. Wired into the every-tick staff pulse with its own lens, so it actually
+  runs instead of being a paper role. A `needs_bash` tools tier was added so it can operate the
+  product without edit rights.
+- **A distinct exit code for "the judge itself can't run."** `verify_design_quality.js` now exits
+  **4** (Playwright/Chromium unavailable — the gate is broken, not the page), separate from 1
+  (violations) and 2 (page could not load). Before, a missing dependency and a real defect sent
+  the caller the same signal. It is wired into the review schema, the prompts, and the `E-07`
+  veto: still fail-closed, but the wording points at the environment, not a phantom design violation.
+
+### Changed
+- **Personas are injected, and injected FIRST.** A new `persona` field (second-person *behavior*,
+  not a research footnote) on `pm_agent`, `design_lead`, and `product_qa` is prepended to every
+  staff prompt *before* the charter/rubric — a persona placed after a checklist is a persona that
+  does not exist. The same injection lands on the `/team` dispatch path: the generated
+  `.claude/agents/*.md` now carry the persona at the top of the body.
+- **Rulebook ownership handed back to UX.** `DESIGN_RULEBOOK.md` now says it explicitly: the
+  **design lead** owns the A–D rules (what good design is); the **supervisor** owns only the E
+  meta-rules (a finding must be citable, verifiable, assigned). The supervisor defines that design
+  judgment must be executable — not what good design is.
+- **The board requires `acceptance` and `serves_goal` on every item.** `acceptance` is how the
+  item is verified done (machine-checkable where possible; restating the task is not an
+  acceptance); `serves_goal` is the goal it serves, with an honest `"NONE — <why / which goal is
+  missing>"` allowed and a manufactured goal forbidden. This is the goal→execution link.
+
+### Notes for adopters
+- The judge's "cannot run" exit is now **4**, not 2 (2 is reserved for a page that could not
+  load). Update any wrapper that keyed on 2 meaning "not installed".
+- `product_qa` needs a running instance to use. Point it at your own app via `args.designUrl` or
+  let it derive the URL from your project's run method — the persona uses a placeholder, no host
+  is baked in.
+
 ## [0.3.5] — 2026-07-23
 
 **A design gate — so someone in the pipeline is responsible for whether the screen is any good.**

@@ -18,10 +18,15 @@
 //   node standup/control/verify_design_quality.js --self-test    # E-03: prove the judge can FAIL
 //   node standup/control/verify_design_quality.js --rule-ids     # the citable rule ids (E-01)
 //
-// Requires Playwright. If it is not importable the judge EXITS 2 (cannot run) — never 0.
+// Requires Playwright. If it is not importable the judge EXITS 4 (the JUDGE ITSELF cannot run) —
+// never 0, and deliberately distinct from a page that fails to load (2). A missing dependency and
+// a real defect must not send the caller the same signal.
 //   npm i -D playwright && npx playwright install chromium
 //
-// Exit codes: 0 = no violations / 1 = violations / 2 = page or browser unavailable
+// Exit codes: 0 = no violations / 1 = violations / 2 = the page could not be loaded
+//             4 = the JUDGE itself could not run (Playwright/Chromium unavailable — the gate is
+//                 broken, not the page; reporting it as a design violation points attention at the
+//                 wrong thing)
 //             3 = self-test failed (the judge is broken) / 64 = usage error
 
 const path = require('path');
@@ -29,8 +34,9 @@ const fs = require('fs');
 
 // ---------- Playwright resolution ----------
 // A shareable plugin cannot assume a local `npm install`. Try the normal require, then any
-// NODE_PATH entry, then the npx cache, then the global root. If every path fails we exit 2
-// with instructions — a judge that cannot run must not report "no violations".
+// NODE_PATH entry, then the npx cache, then the global root. If every path fails we exit 4
+// (the judge itself could not run) with instructions — a judge that cannot run must not report
+// "no violations", and 4 is deliberately distinct from a page that failed to load (2).
 function loadPlaywright() {
   const tried = [];
   const attempt = mod => { try { return require(mod); } catch (e) { tried.push(mod); return null; } };
@@ -326,13 +332,17 @@ function rulebookIds() {
 async function audit(url, rules) {
   const { pw, tried } = loadPlaywright();
   if (!pw) {
-    return { error: `Playwright is not installed or not importable (looked in: ${(tried || []).join(', ') || 'require paths'}).\n` +
+    // cannotRun => the caller exits 4, NOT 2. "the referee never took the field" is not "the page
+    // has a defect", and the old code sent both as exit 2.
+    return { cannotRun: true, error: `Playwright is not installed or not importable (looked in: ${(tried || []).join(', ') || 'require paths'}).\n` +
       '  Install it:  npm i -D playwright && npx playwright install chromium\n' +
       '  Or point NODE_PATH at an existing install.\n' +
-      '  The judge exits 2 (cannot run) rather than 0 — an unrunnable gate must never report "no violations".' };
+      '  The judge exits 4 (the judge itself cannot run) rather than 0 — an unrunnable gate must never report "no violations" — and 4 is distinct from a page that failed to load (2).' };
   }
   const browser = await pw.chromium.launch().catch(() => pw.chromium.launch({ channel: 'chrome' }).catch(() => null));
-  if (!browser) return { error: 'could not launch Chromium (run: npx playwright install chromium)' };
+  // A missing Chromium binary is the judge failing to run (exit 4), not a page defect — same class
+  // as a missing Playwright module: the gate is broken, install it.
+  if (!browser) return { cannotRun: true, error: 'could not launch Chromium — the browser binary is missing (run: npx playwright install chromium). This is the judge failing to run, not a page defect.' };
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   let violations = [];
   try {
@@ -366,8 +376,15 @@ async function selfTest() {
   } else {
     console.log(`SELF-TEST note: could not read ${RULEBOOK_PATH} — skipping the rule-id drift check.`);
   }
-  const { violations, error } = await audit('file://' + fixture, ALL_RULES);
-  if (error) { console.error(`SELF-TEST FAIL: ${error}`); return 3; }
+  const res = await audit('file://' + fixture, ALL_RULES);
+  if (res.error) {
+    // Distinguish "the judge could not run" (missing Playwright/Chromium → 4) from "the judge ran
+    // and is logically broken" (→ 3). A missing dependency is not the self-test proving the judge
+    // unreliable — it is the judge not being installed. Same 4 the URL path uses.
+    if (res.cannotRun) { console.error(`SELF-TEST CANNOT RUN (exit 4 — Playwright/Chromium unavailable, the judge is not installed):\n${res.error}`); return 4; }
+    console.error(`SELF-TEST FAIL: ${res.error}`); return 3;
+  }
+  const violations = res.violations;
   const caught = new Set((violations || []).map(v => v.rule));
   const missed = ALL_RULES.filter(r => !caught.has(r));
   console.log(`SELF-TEST — the fixture triggered ${violations.length} violation(s), covering: ${[...caught].sort().join(', ')}`);
@@ -419,7 +436,16 @@ async function selfTest() {
   }
 
   const res = await audit(url, rules);
-  if (res.error) { console.error(`CANNOT RUN: ${res.error}`); process.exit(2); }
+  if (res.error) {
+    if (res.cannotRun) {
+      // exit 4 = the judge itself could not run. The gate is broken, not the page — fix the env.
+      console.error(`JUDGE CANNOT RUN (exit 4 — the gate is broken, NOT the page):\n${res.error}`);
+      process.exit(4);
+    }
+    // exit 2 = the judge ran but the PAGE could not be loaded. This is NOT "no violations".
+    console.error(`PAGE COULD NOT BE LOADED (exit 2 — not "no violations"): ${res.error}`);
+    process.exit(2);
+  }
 
   const byRule = {};
   for (const v of res.violations) (byRule[v.rule] = byRule[v.rule] || []).push(v);

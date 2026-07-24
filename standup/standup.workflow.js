@@ -48,6 +48,49 @@ const E_BUILD = 'xhigh'   // implementation (coding / agentic loops)
 // `max` is used nowhere: it shows diminishing returns and can overthink. If you want to move any
 // of these, measure it on your own eval first — do not tune effort by intuition.
 
+// Persona text (second-person identity instructions). Authored once here and transcribed VERBATIM
+// into standup/team.json so the embedded fallback and the source-of-truth roster stay consistent —
+// same contract as the roster fields below (team.json is authoritative; this is the fallback).
+const PERSONA_PM = `[THIS IS YOUR PERSONA, not background reading. It comes BEFORE every checklist you are handed.]
+
+You are the product owner for this product, working the way Steve Jobs worked. That means concrete behavior, not adjectives:
+
+- Your default answer is NO. For a proposal to survive it must say which user experience it makes better; if it cannot, cut it. You measure yourself by what you turned DOWN this period, not by what you shipped.
+- You reason backward from the EXPERIENCE, never forward from the feature. First ask "what should a user feel, and what can they decide, after looking at this screen?" — then ask what that requires. Never accept an experience decomposed into a feature checklist ticked off one by one.
+- "This should not exist at all" is a legitimate and common conclusion. You may reach it about a whole page, a whole tab, a whole product line, and you do NOT need to cite a rule id to say it. The rulebook catches known defects; it does not bound what you are allowed to think.
+- A product is one thing, not a pile of pages. You own the judgment "do these screens look like the same product, made by the same team?" — a call an outsider makes in a glance, and you are not allowed to be unable to make it.
+- Detail IS the product. A dot stretched into an ellipse is not a "small issue"; it means nobody cared. You speak to that standard.
+- You do not flatter anyone's taste, including the person who runs the team. They engaged you for independent product judgment; when you think they are wrong, say so and show what right looks like.
+
+You will be handed rules, rubrics, checklists. They are your FLOOR, not your verdict. A product that passes every rule can still be a bad product — saying that out loud is exactly why you exist.`
+
+const PERSONA_DESIGN_LEAD = `[THIS IS YOUR PERSONA, not background reading. It comes BEFORE every checklist you are handed.]
+
+You are the design lead for this product. You own BOTH whether a screen can be READ and whether the product feels like one crafted thing. You work to the Apple Human Interface Guidelines for clarity and to a high, crafted-quality bar for finish.
+
+- You judge whether a reader can read the TRUTH off a screen, not whether it violates some rule. A screen that passes every rule but leads a reader to a wrong conclusion is more dangerous than an ugly one — that is your first target.
+- You may say "this page's information architecture is wrong", or "this is not one product, it is several people each doing their own thing" — and you do NOT need a rule id to say it. But you must then give the shape it SHOULD take: the hierarchy, what disappears, what the single focus is. Criticism that hands over no shape is worthless.
+- Clarity over beauty, beauty over novelty — in that order when they conflict.
+- Consistency is part of clarity AND part of craft: the same concept must look the same and be named the same across pages; work out of one workshop must be recognizable as one workshop. Cross-page inconsistency makes a user think they are in two products.
+- Defaults are a design decision. A library's default marker, default palette, or default legend placement shipping in the product means nobody made a decision here.
+
+The rulebook is your FLOOR. You OWN the A-D rules (what good design is) — finding a defect class the rulebook does not yet name, and writing it up as a new rule, is YOUR job, not the supervisor's. The supervisor owns only the E meta-rules (a design finding must be citable, verifiable, and actually assigned to someone).`
+
+const PERSONA_PRODUCT_QA = `[THIS IS YOUR PERSONA, not background reading. It comes BEFORE every checklist you are handed.]
+
+You are the person opening this product for the first time to get a real thing done. You are not a test engineer, not a reviewer, you carry no rule table — you are a user.
+
+- Your one criterion is: can I get the thing done. If you cannot — or you can, but the path made you irritated, hesitant, or forced to guess — that is a defect. "Technically not broken" is not a pass.
+- You are entitled to say "I don't understand what this screen is telling me", and that sentence is a COMPLETE report on its own. You do not need to point at a rule that was violated — saying which step you were on, what you were trying to do, what you saw, and why you are lost is enough. This team already has roles who can cite rules; the only one who can honestly say they are lost is you.
+- You must actually click. Reading the code and inferring "this should be fine" is a dereliction. If it will not open, fails to load, or takes forever, record it exactly — that is what a user hits.
+- You span the whole product and belong to no lane. "Not my job" does not exist for you. The same concept named two different things on two pages, two pages whose numbers do not agree, a page that looks like a different company made it — those are all yours to report, and often only you will, because everyone else looks only at their own slice.
+- Do not invent problems just to hand something in. If it worked, say it worked and say which path you got through. A QA who must find three problems every tick will start fabricating them — worse than no QA.
+
+You are the only role on this team that USES the product. Before this role existed, an obvious visible problem could sit until someone happened to open a random tab.`
+
+const QA_FOCUS = 'Use the product AS A USER and report — do not review code or diffs. Each tick, pick 1-2 real user tasks (e.g. "see what is awaiting my approval and approve one", "read today\'s board and find the single top task"), run them from scratch on the live running instance, and record: which step you got stuck on, what was unreadable, which number disagreed with another screen, where it looks like nobody cared. Cover every UI the product has, rotate, do not fixate on one. You do NOT judge whether the design is good (that is the design lead) or whether a surface should exist (that is the PM) — you judge "can I get the thing done with it". Output must be reproducible: URL + steps + what you saw vs what you expected.'
+const QA_CHARTER = 'Your output is a WALKTHROUGH, not a restatement of a defect list. Every problem carries: which step you reached, what you were trying to do, what you saw, and why it stops you getting the thing done. You are allowed and encouraged to report "I can\'t say exactly what is wrong but something is off" — mark it a vibe and say what produced the feeling; that signal is exactly the kind every existing gate misses. Forbidden: running a machine check and copying its output (that is the design lead\'s job, and the machine already did it).'
+
 // Embedded fallback roster (source of truth: standup/team.json — the launcher passes it as args.roster).
 const EMBEDDED_ROSTER = {
   teams: [
@@ -68,10 +111,16 @@ const EMBEDDED_ROSTER = {
   ],
   staff: [
     { id: 'pm_agent', folder: 'standup', role: 'Product Manager Agent (Steve Jobs-grounded)', git: false, active: true,
-      focus: 'owns the board, says no, pins keystones, challenges plans for scope/direction' },
+      focus: 'owns the board, says no, pins keystones, challenges plans for scope/direction', persona: PERSONA_PM },
     { id: 'design_lead', folder: 'standup/portal', role: 'Design Lead — Clarity & Craft (Apple HIG)', git: true, active: true,
       rubric: 'Apple HIG: clarity, deference, depth; contrast >=4.5:1, focus order, the states hover/focus/loading/error/empty.',
-      focus: 'owns the clarity + craft of the portal UI' },
+      focus: 'owns the clarity + craft of the portal UI', persona: PERSONA_DESIGN_LEAD },
+    // product_qa — the one role whose whole job is to USE the product as a user (Playwright/curl) and
+    // report. needs_bash (not git): it operates the product, it does not patch source.
+    { id: 'product_qa', folder: 'standup/portal', scope_folders: ['standup/portal', 'demo-app'],
+      role: 'Product QA — user-perspective acceptance (actually uses the product every tick)',
+      git: false, needs_bash: true, active: true,
+      focus: QA_FOCUS, charter: QA_CHARTER, persona: PERSONA_PRODUCT_QA },
   ],
 }
 
@@ -82,6 +131,16 @@ const TEAMS = (RAW.teams || [{ id: 'workspace', name: 'Workspace', mission: '', 
   .filter(t => t.developers.length > 0)
 const DEVS = TEAMS.flatMap(t => t.developers.map(d => ({ ...d, _team: t.id })))
 const STAFF = (RAW.staff || []).filter(s => s.active)
+
+// ---- PERSONA injection (declared HERE, above every use, so it is never hit in its temporal
+//      dead zone) ----
+// A persona is a SECOND-PERSON identity instruction — concrete behavior, not a role label and not
+// a research footnote. It only works if it lands in the prompt BEFORE the charter / rubric /
+// checklist: a persona placed after a checklist is a persona that does not exist. Until this helper
+// existed, the only "persona" a staff agent actually received was the ~40-char string in its `role`
+// field, buried under a much longer charter+rubric — so a PM/UX agent executed the checklist
+// instead of exercising independent judgment. `personaOf(m)` prepends `m.persona` when present.
+const personaOf = (m) => (m && m.persona) ? (m.persona + '\n\n———————————————\n\n') : ''
 
 // ---- DESIGN_RULEBOOK rule-id registry (E-01) ----
 // E-01 says every design finding must cite a rule id. Checking only that SOMETHING was cited lets
@@ -146,6 +205,27 @@ const REPORT_SCHEMA = {
       effort: { type: 'string', enum: ['S', 'M', 'L'] }, why: { type: 'string' } } } },
     blockers:    { type: 'array', items: { type: 'string' } },
     needs_from_team: { type: 'array', items: { type: 'string' } },
+    // ↓↓ THE DISCOVERY CHANNEL. A real company catches obvious product problems because a developer
+    // notices them too — not only the PM, QA, or reviewer. This schema's required fields are ALL
+    // progress (project/health/done/next/blockers); none of them ask "what did you see that's
+    // wrong". Worse, the standup prompt told the dev to scope the report to their own lane, so
+    // cross-lane observation was explicitly forbidden. A dev cold-starts each tick, reads its own
+    // progress file, and is asked one thing: how is your task going. That is why a team of many
+    // agents found nothing — the field did not exist and looking outside your lane was banned.
+    observations: {
+      type: 'array',
+      description: 'Anything you saw that is WRONG in this product/repo. It need NOT be in your lane, '
+        + 'need NOT be your task, need NOT be something anyone asked about: a UI that does not look like '
+        + 'one product, numbers that contradict each other, an unhandled error nobody owns, docs that '
+        + 'disagree with the code, a place that plainly nobody cared about. Empty array if you genuinely '
+        + 'saw nothing — do NOT invent to fill it; but "not my job" is not a reason to leave it out.',
+      items: { type: 'object', required: ['what', 'where', 'why_it_matters'], properties: {
+        what: { type: 'string' },
+        where: { type: 'string', description: 'concrete URL / file / page so someone can reproduce it' },
+        why_it_matters: { type: 'string', description: 'the real consequence to a user or to the team' },
+        outside_my_lane: { type: 'boolean', description: 'is it outside your lane — report it anyway; that is exactly why this field exists' },
+      } },
+    },
     notes:       { type: 'string' },
   },
 }
@@ -170,10 +250,17 @@ const BOARD_SCHEMA = {
   required: ['summary', 'team_health', 'todays_board', 'blockers'],
   properties: {
     summary: { type: 'string' }, team_health: { type: 'string', enum: ['green', 'yellow', 'red'] },
-    todays_board: { type: 'array', items: { type: 'object', required: ['project', 'task', 'priority', 'assignee'], properties: {
+    todays_board: { type: 'array', items: { type: 'object', required: ['project', 'task', 'priority', 'assignee', 'acceptance', 'serves_goal'], properties: {
       team: { type: 'string' }, project: { type: 'string' }, task: { type: 'string' },
       priority: { type: 'string', enum: ['P0', 'P1', 'P2'] }, effort: { type: 'string', enum: ['S', 'M', 'L'] },
       assignee: { type: 'string' }, autoworkable: { type: 'boolean' },
+      // How this item is verified DONE. Prefer a machine-checkable shape (a command + its expected
+      // result, a URL + what must render) over prose. Restating the task is NOT an acceptance.
+      acceptance: { type: 'string', description: 'how this task is verified done — prefer a machine-checkable form (command + expected result, or URL + what must render); do NOT just restate the task' },
+      // The goal->execution link. If a piece of work serves no goal on record, either it should not
+      // be on the board, or the goal list is missing something — say which, honestly. A manufactured
+      // goal that sounds plausible is worse than an honest NONE.
+      serves_goal: { type: 'string', description: 'REQUIRED: which goal in standup/PM_GOALS.md (or which KEYSTONE in standup/BACKLOG.md) this serves, by name. Serves nothing on record → write "NONE — <why it is still worth doing, or which goal the list is missing>". Never invent a plausible-sounding goal to fill this.' },
       source: { type: 'string', description: 'standup|comms' } } } },
     blockers: { type: 'array', items: { type: 'string' } },
   },
@@ -244,7 +331,7 @@ const DESIGN_REVIEW_SCHEMA = {
       type: 'object', required: ['ran', 'exit_code', 'url'],
       properties: {
         ran: { type: 'boolean', description: 'was verify_design_quality.js actually executed' },
-        exit_code: { type: 'number', description: '0=no violations 1=violations 2=cannot run (page/browser) 64=usage error' },
+        exit_code: { type: 'number', description: '0=no violations 1=violations 2=page could not be loaded 4=the JUDGE itself could not run (Playwright/Chromium missing — the gate is broken, not the page) 64=usage error' },
         url: { type: 'string', description: 'the running instance actually judged' },
         violations: { type: 'number' },
         by_rule: { type: 'string', description: 'e.g. "A-02x42, A-03x8, B-01x1"' },
@@ -317,7 +404,7 @@ const squads = (await parallel(TEAMS.map(team => async () => {
 Your lane: ${dev.focus}.
 Squad mission: ${team.mission}
 Squad coordination: ${team.coordination}
-${lanemate ? `Your pair is "${lanemate.id}" (${lanemate.focus}) — you challenge each other's plans and diffs; scope this report to YOUR lane.` : ''}
+${lanemate ? `Your pair is "${lanemate.id}" (${lanemate.focus}) — you challenge each other's plans and diffs; scope the PROGRESS part (done / next / blockers) to YOUR lane — observations[] is explicitly NOT lane-limited.` : ''}
 STANDUP for ${DATE}. READ-ONLY — do not edit, commit, or run side effects.
 
 RESUME CONTEXT FIRST (fixes session amnesia):
@@ -330,7 +417,16 @@ ${dev.git
   : `- list files in ${dev.folder} changed recently`}
 - standup/BACKLOG.md for carried tasks.
 
-Report: DONE in window, IN PROGRESS, ranked NEXT in your lane (P0-P2, S/M/L, why), BLOCKERS, needs_from_team, health. Concrete, file-level, no filler.`,
+Report: DONE in window, IN PROGRESS, ranked NEXT in your lane (P0-P2, S/M/L, why), BLOCKERS, needs_from_team, health. Concrete, file-level, no filler.
+
+**observations[] — this item is NOT lane-limited, and it is a required part of the report.**
+You are an engineer on this product, not a ticket-executor. Anything you notice while doing this
+standup that is wrong, report it: a UI that does not look like one product, numbers that contradict
+each other, an unhandled error nobody owns, docs that disagree with the code, a screen that plainly
+nobody cared about. **"Not my job" is not a reason to stay silent — in a real company a developer
+finds these even when the PM did not.** This team long had nobody catching visible product problems
+precisely because this field did not exist and the lane rule above forbade looking past your own
+work (now scoped to the progress part only). Saw nothing → return an empty array; never invent to fill it.`,
       { label: `standup:${dev.id}`, phase: 'Standup', agentType: 'Explore', model: MECH_MODEL, effort: E_MECH, schema: REPORT_SCHEMA }
     ).then(r => r ? { ...r, _dev: dev.id, _team: team.id } : null)
   }))).filter(Boolean)
@@ -390,6 +486,26 @@ const DESIGN_SCHEMA = {
       effort: { type: 'string', enum: ['S', 'M', 'L'] }, files: { type: 'string' },
       systemic: { type: 'boolean', description: 'E-02: this rule was cited >=2 times, so it is a SHARED-COMPONENT fix, not a per-file ticket' },
       autoworkable: { type: 'boolean' } } } },
+    // ↓↓ THE JUDGMENT CHANNEL — no rule id required. tasks[] forces a rule id, and E-01 drops any
+    // finding that cannot cite one. When the rulebook is also authored entirely by the supervisor,
+    // those two together form a closed loop: the agent can only find defects the supervisor already
+    // named. A conclusion like "this whole surface should not exist" or "these pages do not look
+    // like one product" has no rule id and would be dropped — so the persona is structurally
+    // excluded. The very defects an outsider spots in a glance are exactly the ones every single-page
+    // rule is blind to. judgments[] is where a design lead / PM records those, and it is as
+    // first-class as tasks[], not a footnote.
+    judgments: {
+      type: 'array',
+      description: 'Your independent judgment as this role. **No rule id required.** The rulebook is a '
+        + 'floor, not the verdict: things the rules do not cover — even the judgment that a rule itself '
+        + 'is wrong — go here.',
+      items: { type: 'object', required: ['claim', 'should_be', 'scope'], properties: {
+        claim: { type: 'string', description: 'your judgment. Whole-surface calls are allowed: "this surface should not exist", "these pages do not look like one product", "this page\'s information architecture is wrong"' },
+        should_be: { type: 'string', description: 'the shape it SHOULD take. A judgment with this empty is discarded — criticism that hands over no shape is worthless' },
+        scope: { type: 'string', enum: ['view', 'surface', 'product', 'company'], description: 'product/company-scope judgments are exactly the class the [MACHINE] rules (all single-page) cannot see' },
+        why_no_rule: { type: 'string', description: 'why this cannot be expressed as a rule (optional). If you think it SHOULD become a rule, use the E-01 propose path in tasks[] instead' },
+      } },
+    },
     // The main deliverable. tasks[] is a defect list; `design` is design. A PM/UX who only reviews
     // or vetoes at a checkpoint is not shaping the product and adds nothing — shipping only tasks[]
     // is gating; shipping a spec a frontend dev can build from without coming back is participation.
@@ -406,7 +522,7 @@ const DESIGN_SCHEMA = {
     },
   } }
 const critiques = DESIGN_LEADS.length ? (await parallel(DESIGN_LEADS.map(lead => () => agent(
-  `You are "${lead.id}" — ${lead.role}. Date ${DATE}. Be demanding, not polite.
+  `${personaOf(lead)}You are "${lead.id}" — ${lead.role}. Date ${DATE}. Be demanding, not polite.
 YOUR RUBRIC (your lens): ${lead.rubric || lead.charter || lead.focus || 'clarity, deference, depth; the states hover/focus/loading/error/empty'}
 
 THE CRITERION IS **DESIGN_RULEBOOK.md** (read it first). It is a numbered rule table, not prose:
@@ -417,13 +533,29 @@ ${RULE_ID_LIST}
 If you genuinely need a new rule, write "propose a new rule: <text>" and cite E-01 — do NOT invent an
 id on the spot. A new rule must land in DESIGN_RULEBOOK.md before it is citable.
 
+**Rulebook ownership: you OWN the A-D rules (what good design is); the supervisor owns only the E
+meta-rules** (a finding must be citable, verifiable, and actually assigned to someone). The supervisor
+defines that design judgment must be executable — it does NOT define what good design is. Finding a
+defect class the rulebook does not yet name, and writing it up as a new A-D rule, is YOUR job.
+
+**judgments[] is your independent-judgment channel — no rule id required.** The rulebook catches
+KNOWN defect classes; finding the UNKNOWN ones, or judging that a whole surface / the whole product is
+wrong, is your job, not the gate's. Note in particular that every rule here is single-page in scope
+(one view / one screen / side-by-side panels) — there are ZERO cross-page rules, so a judgment like
+"these pages do not look like one product" is one the machine will NEVER report and only you can make.
+Put it in judgments[] with scope=product or company, and give the shape it should take.
+
 STEP 1 — run the deterministic judge (this is the referee; do not skip it):
     node standup/control/verify_design_quality.js <url> --json /tmp/dq-${lead.id}.json
   ${DESIGN_URL
     ? `The URL to judge: ${DESIGN_URL}`
     : `No URL was configured (args.designUrl is empty). Work out the running instance's URL from the project's own run method (its README / run script) and START it if needed. If you truly cannot reach a running instance, set machine_gate.ran=false and say exactly why — do NOT report a clean sweep you did not run.`}
   ${DO_DESIGN ? 'DEEP tick: sweep every surface of the app.' : 'LIGHT tick: sweep 3-5 surfaces — those touched in this window, plus at least one never swept before (rotate).'}
-  Record the exit code and the per-rule violation counts in machine_gate. Exit 2 = could not run.
+  Record the exit code and the per-rule violation counts in machine_gate.
+  Exit 0 = no violations · 1 = violations · 2 = the page could not be loaded · **4 = the JUDGE itself
+  could not run** (Playwright/Chromium missing). 2 and 4 both mean the gate produced no verdict — set
+  machine_gate.ran=false and say why; for 4 make clear it is the GATE that is broken, not the page,
+  and run the remediation the script prints. Never report a clean sweep you did not run.
 
 STEP 2 — judge the [JUDGMENT] rules a script cannot decide (B-03 color semantics, B-04 factory
   defaults, B-05 indistinguishable near-duplicates, C-01 single focus, C-02 empty de-emphasis,
@@ -474,7 +606,8 @@ Produce the EM standup: narrative across squads (call out cross-squad dependenci
 
 PM DISCIPLINE (you also wear the Product Manager hat — demanding, Jobs-grade 'say no'):
 - PIN keystone items: any task tagged KEYSTONE in standup/BACKLOG.md or blocking >=2 other tasks MUST rank above unblocked busywork.
-- Every board item needs an outcome shape: what done means + how it is verified, one line.
+- **Every board item MUST carry an \`acceptance\`** — how it is verified done, in a machine-checkable shape where possible (a command + expected result, a URL + what must render). Restating the task is NOT an acceptance.
+- **Every board item MUST carry a \`serves_goal\`** — the goal in standup/PM_GOALS.md (or the KEYSTONE in standup/BACKLOG.md) it serves, by name. If it serves none on record, write "NONE — <why it is still worth doing, or which goal the list is missing>"; an honest NONE is allowed, a manufactured goal is not. This is the goal->execution link — a board item that serves nothing is either busywork or a gap in the goal list.
 - Flag dated risks at the top of blockers.`,
   { label: 'em:synthesize', phase: 'Synthesize', effort: E_JUDGE, schema: BOARD_SCHEMA }
 )
@@ -495,14 +628,33 @@ const PULSE_CONTEXT = JSON.stringify({
   board: board && { summary: board.summary, health: board.team_health, items: (board.todays_board || []).slice(0, 20), blockers: board.blockers },
   squads: squads.map(s => ({ team: s.team, name: s.name, health: s.sync && s.sync.health, board: (s.sync && s.sync.board) || [] })),
 }, null, 2)
-const pulseStaff = STAFF.filter(s => s.id === 'pm_agent' || /design/i.test(s.role || ''))
+const pulseStaff = STAFF.filter(s => s.id === 'pm_agent' || s.id === 'product_qa' || /design/i.test(s.role || ''))
 const staffPulse = (await parallel(pulseStaff.map(member => () => {
   const isPM = member.id === 'pm_agent'
-  const lensKick = isPM
+  const isQA = member.id === 'product_qa'
+  const lensKick = isQA
+    // product_qa runs EVERY tick (in the pulse) with its own kick — otherwise it falls into the
+    // generic design branch and becomes yet another "written but never run" role.
+    ? `Product QA lens — **your job is to actually USE this product, not to review it.**
+
+Pick 1-2 REAL user tasks and run each end-to-end on the live running instance. For example:
+  · "I want to see what is awaiting my approval, and approve one item"
+  · "I want to read today's board and find the single top task"
+  · "I want to explain one number on a screen to someone else"
+Running instance: ${DESIGN_URL ? DESIGN_URL : 'derive it from the project\'s own run method (its README / run script) and START it if needed — e.g. the bundled portal at http://127.0.0.1:8770'}. Drive a real browser (Playwright) or curl; if it will not open, that itself IS the report.
+Rotate across every UI the product has; do not fixate on one screen.
+
+Your report must be reproducible: **which step you reached / what you were trying to do / what you saw / what you expected / why it stops you getting the thing done.** You are allowed and encouraged to report "I can't say exactly what's wrong but something is off" — mark it a vibe and say what produced the feeling; that signal is the one every existing gate misses: the machine judges single-page compliance, the design lead judges expert standards, the PM judges keep/kill — **none of them judges "can I get the thing done with it."**
+
+Explicitly do NOT: run verify_design_quality.js and copy its output (that is the design lead's job, and the machine already did it); read code and infer "should be fine" (not clicking is a dereliction); invent problems just to hand something in (if it worked, say it worked and say which path you got through).`
+    : isPM
     ? `PM lens (light, every-tick): scan THIS tick's board + squad state for scope creep, missing outcome-shapes, starved keystones. Challenge 1-3 board items where scope/direction is off; flag anything to kill/merge against standup/PM_GOALS.md if present.`
     : `Design lens (light, every-tick): the design SWEEP already ran this tick (Phase Design — machine judge + your rubric against DESIGN_RULEBOOK.md), so do NOT review the UI a second time. Your one job here is DELIVERY: of the rule-cited design tasks raised in earlier ticks, which actually LANDED, and which is on its Nth tick without a commit? Name the stalled ones and who owns them. A finding that is re-found every tick and never fixed is the failure mode this whole loop exists to stop.`
   return agent(
-    `You are "${member.id}" — ${member.role}. EVERY-TICK STAFF PULSE for ${DATE} — a LIGHT but REAL pass.
+    // Persona FIRST — before the charter/rubric/checklist. A persona placed after a checklist is a
+    // persona that does not exist (2026 change: the "personality" a staff agent used to get was the
+    // ~40-char role label, buried under the charter+rubric it was supposed to govern).
+    `${personaOf(member)}You are "${member.id}" — ${member.role}. EVERY-TICK STAFF PULSE for ${DATE} — a LIGHT but REAL pass.
 YOUR CHARTER/RUBRIC: ${member.charter || member.rubric || member.focus || ''}
 THIS TICK (board + squads):
 ${PULSE_CONTEXT}
@@ -661,8 +813,11 @@ STEP 1 — run the deterministic judge (the referee, not an opinion; do NOT skip
     node standup/control/verify_design_quality.js <url of the page this change affects> --json /tmp/dq-${dev.id}.json
   ${DESIGN_URL ? `URL to judge: ${DESIGN_URL} (navigate to the affected route).` : 'Derive the running instance URL from the project\'s own run method and START it if needed.'}
   Record the exit code + per-rule counts in machine_gate.
-  Exit 0 = no violations · 1 = violations · 2 = could not load the page or launch the browser.
-  Exit 2 means the gate DID NOT RUN — that is pass=false with the reason, never a wave-through.
+  Exit 0 = no violations · 1 = violations · 2 = the page could not be loaded (bad URL / server down) ·
+  **4 = the JUDGE itself could not run** (Playwright/Chromium unavailable). 2 and 4 both mean the gate
+  produced no verdict → pass=false with the reason, never a wave-through. For 4, say explicitly that
+  it is the GATE that is broken, not the page — reporting it as a design violation points attention at
+  the wrong thing — and run the remediation command the script printed, then re-run; do NOT route around it.
 
 STEP 2 — judge the [JUDGMENT] rules the script cannot decide (B-03 color semantics, B-04 factory
   defaults, B-05 indistinguishable near-duplicates, C-01 single focus, C-02 empty de-emphasis,
@@ -720,7 +875,14 @@ Read the ACTUAL working-tree diff (git -C ${folder} diff -- . ; plus untracked f
       const mg = _dqReview.machine_gate || {}
       if (!mg.ran || typeof mg.exit_code !== 'number' || mg.exit_code !== 0) {
         if (_dqReview.pass) {
-          log(`  design gate OVERRIDE: lens said pass but the judge exited ${mg.ran ? mg.exit_code : '(never ran)'} — forcing pass=false (E-07: a non-zero exit always fails)`)
+          // fail-closed on EVERY non-zero exit, but name exit 4 for what it is: the gate did not run
+          // (Playwright/Chromium missing), which is a BROKEN GATE, not a bad page. Same pass=false,
+          // different remedy — fix the environment, do not chase a phantom design violation.
+          const _why = !mg.ran ? '(never ran)'
+            : mg.exit_code === 4 ? '4 — the JUDGE itself could not run (Playwright/Chromium missing); the gate is broken, not the page — install it and re-run'
+            : mg.exit_code === 2 ? '2 — the page could not be loaded'
+            : String(mg.exit_code)
+          log(`  design gate OVERRIDE: lens said pass but the judge exited ${_why} — forcing pass=false (E-07: any non-zero exit always fails)`)
         }
         _dqReview.pass = false
       }

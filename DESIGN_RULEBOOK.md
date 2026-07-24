@@ -22,13 +22,35 @@
   enter the queue — either add a rule, or it is not a defect.
 - Rules come in two kinds:
   - **`[MACHINE]`** — decided by `standup/control/verify_design_quality.js`, which returns an
-    exit code. That is a referee, not an opinion.
+    exit code (0 no violations · 1 violations · 2 the page could not be loaded · **4 the judge
+    itself could not run** — Playwright/Chromium missing, i.e. the gate is broken, not the page).
+    That is a referee, not an opinion.
   - **`[JUDGMENT]`** — decided by the `design-quality` review lens (the design lead's rubric).
 - **Rules grow.** When one rule is cited repeatedly, you fix the rule or the shared component,
   not the individual file (see `E-02`).
 - Adopting this in your own project: keep the rule ids and the thresholds, replace the
   examples. Ids are the vocabulary your reviewers, your board, and the judge all share — if
   you renumber them, renumber them everywhere at once.
+
+## Who owns this file
+
+| Part | Owner | Why |
+|---|---|---|
+| **A–D** (the concrete design rules — *what good design is*) | the **design lead** (`design_lead`); the PM holds veto on product-level calls | deciding what good design is is a UX job, not the supervisor's |
+| **E** (the meta-rules) | the **supervisor** | the supervisor defines that a design judgment must be *executable, verifiable, and assigned to someone* — it does **not** define what good design is |
+
+This split exists to break a loop. A rulebook authored entirely by the supervisor, combined with
+`E-01` ("a finding without a rule id does not enter the queue"), is closed: the supervisor writes the
+rules, the rules admit only findings that cite those rules, so an agent can only ever surface defects
+the supervisor already named — the persona is structurally excluded. An outsider's one-glance
+judgment ("these two pages do not look like one product") matches **no** rule, because every rule
+here is **single-page in scope** (one view / one screen / side-by-side panels): there are zero
+cross-page rules, and nobody's job was "the whole." The `judgments[]` output channel (in the design
+and PM schemas) is the fix — an independent-judgment channel that does **not** require a rule id, for
+conclusions the rules cannot express, including the judgment that a rule itself is wrong. Its one
+condition is that it states the shape things *should* take; criticism that hands over no shape is
+discarded. Finding a defect class the rulebook does not yet name, and writing it up as a new A–D
+rule, is the **design lead's** job (via the `E-01` propose path), not the supervisor's.
 
 ---
 
@@ -76,7 +98,7 @@
 
 | Rule | Content |
 |---|---|
-| **E-01** | **Every finding must cite a rule id, and the id must EXIST in this file.** No id → either add a rule or it is not a defect. An id that appears nowhere in this rulebook is *inadmissible*: presence-only checking lets any string impersonate a rule, at which point the citation discipline that replaced prose rubrics has quietly become decorative. A genuinely new rule is **proposed → queued → landed here**, then cited — never minted at the point of use. |
+| **E-01** | **Every finding must cite a rule id, and the id must EXIST in this file.** No id → either add a rule or it is not a defect. An id that appears nowhere in this rulebook is *inadmissible*: presence-only checking lets any string impersonate a rule, at which point the citation discipline that replaced prose rubrics has quietly become decorative. A genuinely new rule is **proposed → queued → landed here**, then cited — never minted at the point of use.<br>**Judgment-level conclusions do NOT need a rule id (added 0.3.6).** "This surface should not exist", "these pages do not look like one product", "this page's information architecture is wrong" are independent PM/UX judgments — they travel the `judgments[]` channel and are **not** bound by this rule. Their one condition is that they state what *should* be (a judgment with no proposed shape is discarded). Before this, E-01 covered *every* finding, and so silently excluded any judgment that could not be mapped to an existing rule — while the rulebook was authored entirely by the supervisor, which made the supervisor's blind spots the whole team's blind spots. This is the branch that lets the persona reach a conclusion the rules cannot name. |
 | **E-02** | **Repeated citation ⇒ fix the rule, not the instance.** If one rule id is cited ≥2 times within a surface, or across ≥2 surfaces, per-file tickets are **forbidden**; it must be escalated to "change the shared component / change the rule, then regenerate the affected batch."<br>*Anthropic: "the fix isn't per-file. You add one sentence to the rulebook and regenerate the affected batch. The rulebook keeps growing; the code never gets hand-patched against it."* |
 | **E-03** | **The judge must itself be verified.** Every new `[MACHINE]` rule ships with a **deliberately broken fixture** proving the rule FAILS. A judge that cannot catch breakage is not a judge — that is exactly what `verify_design_quality.js --self-test` runs. Every design verdict is unreliable until the judge can fail. |
 | **E-04** | **Priority on conflict: A > B > C > D.** Accessibility always beats aesthetics. |

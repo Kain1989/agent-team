@@ -83,7 +83,10 @@ worktree → review the diff → **Approve** → commit. (Details: `standup/port
 - **Team Portal Squad** *(the exception)* — `portal_backend` + `portal_frontend`. Owns the
   Mission Control portal itself.
 - **Staff** — `pm_agent` (Steve-Jobs-grounded scope/say-no + board) · `design_lead`
-  (Apple-HIG lens on the portal UI). `comms_triage` is present but inactive.
+  (Apple-HIG lens on the portal UI) · `product_qa` (the one role that USES the product as a user
+  every tick and reports where it breaks). `comms_triage` is present but inactive. `pm_agent`,
+  `design_lead` and `product_qa` each carry a `persona` — a second-person behavior instruction
+  injected *before* their charter/rubric.
 - **Supervisor** = you (autonomous gates each tick). **The approval gate = the human**
   (the code-task commit in the portal; merges/pushes are theirs).
 
@@ -135,7 +138,9 @@ tasks land on **this** tick's board carrying their rule ids.
   are decided by a script's exit code; `[JUDGMENT]` rules by the design lens reading a real screenshot.
 - `standup/control/verify_design_quality.js` — the judge. `--self-test` proves it FAILS on a
   deliberately broken fixture (`E-03`: a judge that can't catch breakage isn't a judge); `--rule-ids`
-  prints the citable ids. It needs Playwright, and exits **2** rather than 0 if it cannot run.
+  prints the citable ids. It needs Playwright, and exits **4** (the judge itself could not run —
+  the gate is broken, not the page) rather than 0 if it cannot run — distinct from **2** (the page
+  could not be loaded) and **1** (violations).
 - The target URL is a **parameter** (`args.designUrl`), never a baked-in default.
 - `E-02`: a rule cited twice is a shared-component fix, never N per-file tickets.
 - Run `node standup/control/check_workflow_parse.js standup/standup.workflow.js` after editing any
