@@ -2,8 +2,9 @@
 
 A **clone-and-run AI engineering team you drive from Claude Code.** Open this folder in
 Claude Code, type a prompt, and a paired-squad team runs a full gated SDLC —
-investigate → plan → pair-challenge → implement → test gate → review → commit →
-supervisor sign-off — on a bundled sample project. A local **Mission Control** portal
+intake → investigate → plan → pair-challenge → implement → test gate → review → commit →
+supervisor sign-off — on a bundled sample project. (That sequence has one canonical
+definition: `standup/team.json` → `manager.policy.sdlc_pipeline`.) A local **Mission Control** portal
 runs alongside so you can watch and manage the squads in the browser, and **you are the
 approval gate** for anything irreversible (merge / deploy).
 

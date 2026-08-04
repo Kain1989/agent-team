@@ -3,6 +3,62 @@
 All notable changes to the **agent-team** plugin. Format: [Keep a Changelog](https://keepachangelog.com/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.7] — 2026-08-03
+
+**Three gates that could not open, and one parse failure that silently changed which pipeline ran.**
+
+### The problem this solves
+
+A gated SDLC is supposed to stop bad work. These three defects stopped *all* work, and two of
+them did it without ever reporting an error.
+
+**A gate that stops on any reserve is a gate that never opens.** Both the INTAKE checkpoint and
+the pair's plan challenge treated `approve=false` / `approved=false` as fatal. But a
+conscientious reviewer sets that flag the moment it sees *anything* improvable — so the more
+diligent the reviewer, the less could ever ship. Observed on the live system this day: three
+consecutive runs on one task, ~4.6M tokens, **zero lines of code**, while the supervisor's own
+verdicts read *"Fix the eight below and this ships — about a page of work, not a rewrite"*, then
+*"DIRECTION, GRAIN AND DATA PATH: APPROVED"*, and finally *"DO NOT RE-PLAN. BUILD proceeds with
+the must_fix applied."* It said go three times; the gate stopped it three times.
+
+**The pair critiques; it does not veto.** Doctrine has always said pairs *critique*. The code
+said otherwise: a critique of the form "direction is right, fix these four things" ended the task
+as hard as one finding a fatal design error, and the `required_changes` already written never
+reached the implementer.
+
+**Unparseable args silently changed which pipeline ran.** `catch (e) { A = null }` looked like
+"a few missing parameters". It is not: `args.task` disappears, so a single-task dispatch falls
+into the whole-roster standup shape; `DO_WORK` goes false, so there is no Work phase at all and
+the run is *structurally incapable* of producing code; the roster falls back to the embedded copy,
+so every squad gets polled. One unescaped double-quote inside a task string was enough. Nothing
+errored — the run just spent 38 agents standing up nine squads nobody had asked about.
+
+### What changed
+
+- `approve=false` / `approved=false` must now answer **`blocking`**: is this a real blocker —
+  would work done against it have to be *thrown away*, not amended? Wording tightenings, optional
+  hardening, "one amendment away" are all `blocking=false`, and the run continues carrying the
+  `must_fix` / `required_changes`. A **missing** `blocking` field still stops: silence is not
+  consent to proceed. A null verdict (dead agent) still stops: no verdict is not approval.
+- A reserve still earns its **revision round** either way — that is how the objection gets
+  absorbed into the contract rather than dropped. `blocking` decides only whether the run *stops*
+  afterwards, never whether the objection is heard.
+- Unparseable `args` now **throws**, with the byte offset and the offending text quoted. The real
+  cure is at the call site: hand the Workflow tool an **object**, not a JSON string — objects
+  never pass through hand-written escaping, so the failure mode disappears at source.
+
+### Judge
+
+`standup/control/tests/test_sdlc_routing.js` — **91 cases**, and `--self-test` drives **12 named
+engine mutations** each of which must turn a *named* case red (`E-03`). Four of those fixtures are
+new and cover exactly the reversals above, including one that restores `A = null` and one that
+gives the pair its veto back. A fixture whose anchor stops matching the source is a hard error,
+never a skip: a mutation that silently no-ops reads as a pass.
+
+This release also lands the previously-uncommitted SDLC-entry port — INTAKE gated on *both*
+entry paths, and a pipeline that refuses to run against an assignee, pair, folder or review
+surface nobody declared.
+
 ## [0.3.6] — 2026-07-24
 
 **The team could run every gate and still find nothing wrong — because no role was structurally able to.**

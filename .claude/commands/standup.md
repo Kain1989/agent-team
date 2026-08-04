@@ -12,18 +12,20 @@ Run the agent team's full standup + gated work cycle now. Do it; don't just desc
 
 2. **Read `standup/team.json`** (the full roster) and confirm today's date (`date +%Y-%m-%d`).
 
-3. **Run the whole squad via the Workflow tool** — per-dev standup → squad sync → EM board →
-   light staff pulse → gated work (plan → pair challenge → implement+tests → 2-lens review →
-   commit-on-green) on the top autoworkable task:
+3. **Run the whole squad via the Workflow tool** — per-dev standup → squad sync → design pass →
+   EM board → light staff pulse → the gated SDLC on the top autoworkable task:
    ```
    Workflow({ scriptPath: "standup/standup.workflow.js",
               args: { date: "<today>", since: "6 hours ago",
                       roster: <the parsed contents of standup/team.json>,
                       work: true, maxTasks: 1 } })
    ```
-   If this build has no `Workflow` tool, orchestrate the same gated SDLC yourself with the
-   Task tool (per-dev standup subagents → an EM board → for the top task: plan → fresh-context
-   pair challenge → implement+`pytest` → 2 fresh-context reviews → commit on green only).
+   The gated steps are **not restated here**: `standup/team.json` → `manager.policy.sdlc_pipeline`
+   is the one canonical list, and the engine is its only implementation. (This line used to carry a
+   second, hand-maintained copy as a no-`Workflow` fallback — it said "2-lens review" while the
+   engine derives green from the lenses actually planned, and it never mentioned INTAKE. If your
+   build has no `Workflow` tool, read the canonical list and run those steps; do not re-fork it
+   into this file.)
 
 4. **Close out the tick:** summarize the EM board, what was worked, the green/committed counts,
    and any commits on `demo-app` feature branches. Append a `## standup (<today>)` section to

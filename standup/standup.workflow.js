@@ -1,21 +1,50 @@
 export const meta = {
   name: 'standup-mvp',
-  description: 'Slim, shareable squad standup + gated SDLC work pipeline: per-dev standup (with persistent progress files) -> squad sync -> EM board -> light staff pulse -> gated plan->challenge->implement+test->2-lens review->commit-on-green. No external services. Run it directly (Workflow tool) over the MVP roster.',
+  // The SDLC sequence below is ONE sequence with ONE canonical source: standup/team.json ->
+  // manager.policy.sdlc_pipeline. It is restated here (and nowhere else that can drift silently)
+  // because `meta` is what the Workflow tool shows the user. Note what is NOT written here: a lens
+  // COUNT. Green is derived from the lenses actually planned for the task (see the Work phase) —
+  // printing "2-lens review" is how a 3rd lens gets added and silently ignored, which is the same
+  // false-promise defect as advertising a gate that never runs.
+  description: 'Slim, shareable squad standup + gated SDLC work pipeline: per-dev standup (with persistent progress files) -> squad sync -> design pass -> EM board -> light staff pulse -> gated INTAKE -> INVESTIGATE -> PLAN -> PLAN CHALLENGE -> IMPLEMENT -> TEST GATE -> REVIEW (the lenses planned for the task) -> COMMIT ON GREEN. No external services. Run it directly (Workflow tool) over the MVP roster: the whole board (args.work) or ONE task (args.task) — both run the SAME loop.',
   phases: [
-    { title: 'Comms',      detail: 'optional: a comms_triage staff agent reads a local messages/inbox/ -> action items (skipped unless an active comms_triage exists)' },
+    { title: 'Comms',      detail: 'optional: a comms_triage staff agent reads a local messages/inbox/ -> action items (skipped unless an active comms_triage exists). Skipped entirely on the single-task path (args.task)' },
     { title: 'Standup',    detail: 'one read-only agent per active developer; reads <folder>/.standup/<dev>.md to resume context' },
-    { title: 'Team Sync',  detail: 'per-squad merge: squad board + cross-project dependencies' },
-    { title: 'Synthesize', detail: 'EM merges squad boards into one ranked board' },
+    { title: 'Team Sync',  detail: 'per-squad merge: squad board + cross-project dependencies (an agent phase tag, not a phase() call)' },
     { title: 'Design',     detail: 'design_lead runs the deterministic judge (control/verify_design_quality.js) over the live UI, then judges the [JUDGMENT] rules of DESIGN_RULEBOOK.md; every finding cites a rule id. Runs BEFORE Synthesize so its tasks land on THIS tick\'s board instead of in a progress file nobody reads' },
-    { title: 'Staff Pulse',detail: 'light-but-real lens from pm_agent (scope/say-no) + design_lead (delivery of the design queue)' },
-    { title: 'Work',       detail: 'SDLC per autoworkable task: plan -> pair challenge (fresh ctx) -> implement+tests -> review (pair + correctness + conventions+tests, PLUS a design-quality lens whenever the change is observable) -> commit-on-green (feature branch, no push)' },
+    { title: 'Synthesize', detail: 'EM merges squad boards into one ranked board' },
+    { title: 'Staff Pulse',detail: 'light-but-real lens from pm_agent (scope/say-no) + design_lead (delivery of the design queue) + product_qa (actually uses the product)' },
+    { title: 'Work',       detail: 'the gated SDLC per task, identical on both entry paths: INTAKE (pm_agent turns the raw ask into an outcome contract; the supervisor gates it — one revision, one recheck, then the run STOPS) -> INVESTIGATE -> PLAN -> PLAN CHALLENGE (fresh ctx) -> IMPLEMENT+tests -> TEST GATE -> REVIEW (pair + correctness + conventions+tests, PLUS a design-quality lens driven by the squad\'s declared review_surface) -> COMMIT ON GREEN (feature branch, no push)' },
   ],
 }
 
 // ---- inputs ----
 // args = { date, since, roster, work:false, maxTasks:2 }  — pr/merge/deploy are intentionally absent (MVP).
+// The harness may deliver args as a JSON-encoded STRING. Parsing it is fine; SWALLOWING a
+// parse failure is not. `A = null` used to look like "a few missing parameters" — it is not.
+// It silently CHANGES WHICH PIPELINE RUNS: args.task disappears, so a single-task dispatch
+// falls into the whole-roster standup shape; DO_WORK goes false, so there is no Work phase at
+// all and the run is structurally incapable of producing code; the roster falls back to the
+// embedded copy, so every squad gets polled; DATE becomes 'UNKNOWN-DATE'.
+// Observed for real (2026-08-03): one unescaped double-quote inside a task string made a
+// one-task run spend 38 agents standing up nine unrelated squads, and nothing errored.
+// This is the same disease as a review apparatus pointed the wrong way — it never fails,
+// it just quietly stops doing the thing you asked for. So: unparseable args THROW.
+// The real cure is on the calling side — hand the Workflow tool an OBJECT, not a JSON string;
+// objects never pass through hand-written escaping, so the failure mode disappears at source.
 let A = args
-if (typeof A === 'string') { try { A = JSON.parse(A) } catch (e) { A = null } }
+if (typeof A === 'string') {
+  try { A = JSON.parse(A) }
+  catch (e) {
+    const _pos = Number((String(e.message).match(/position (\d+)/) || [])[1] || 0)
+    throw new Error('args was a JSON string and failed to parse: ' + e.message
+      + ' — refusing to fall back to a whole-roster standup, which would silently turn one'
+      + ' task into a full poll that cannot produce code. Fix: pass args as an OBJECT, not a'
+      + ' JSON string (unescaped quotes and newlines inside task text are the usual cause).'
+      + ' Near the error: '
+      + JSON.stringify(String(args).slice(Math.max(0, _pos - 90), _pos + 90)))
+  }
+}
 const DATE    = (A && A.date)    || 'UNKNOWN-DATE'
 const SINCE   = (A && A.since)   || '6 hours ago'
 const DO_WORK = !!(A && A.work)
@@ -97,6 +126,9 @@ const EMBEDDED_ROSTER = {
     { id: 'demo_squad', name: 'Demo Dev Squad',
       mission: 'Builds + maintains the bundled demo-app (a small Python library) through the full gated SDLC.',
       coordination: 'Two paired developer-agents who challenge each other in fresh context; dev_a builds, dev_b reviews.',
+      review_surface: { kind: 'cli', label: 'demo-app test suite (textkit, a Python string library — no screen)',
+        url: '', inspect: 'cd demo-app && python3 -m pytest -q',
+        how: 'Run inspect from the repo root on a clean checkout; no venv, no network, no server.' },
       developers: [
         { id: 'dev_a', folder: 'demo-app', role: 'Developer — Builder',  git: true, active: true, pair: 'dev_b', focus: 'implement demo-app backlog items with tests', context: 'demo-app/README.md', tests: 'pytest (demo-app/tests)' },
         { id: 'dev_b', folder: 'demo-app', role: 'Developer — Reviewer & Tests', git: true, active: true, pair: 'dev_a', focus: 'fresh-context plan/diff review, test coverage, edge cases', context: 'demo-app/README.md', tests: 'pytest (demo-app/tests)' },
@@ -104,6 +136,9 @@ const EMBEDDED_ROSTER = {
     { id: 'portal', name: 'Team Portal Squad',
       mission: 'Builds + owns the local Mission Control portal (standup/portal) — the team status board + job approval inbox.',
       coordination: 'FastAPI backend + a no-build static page integrate via a fixed JSON contract; the pair challenge each other.',
+      review_surface: { kind: 'web', label: 'Mission Control (local)', url: 'http://127.0.0.1:8770',
+        inspect: './setup.sh >/dev/null 2>&1 && (cd standup/portal && ./run_local.sh >/tmp/agent-team-portal.log 2>&1 &) && sleep 8 && curl -sS -f http://127.0.0.1:8770/healthz',
+        how: 'The prerequisite is INLINE in inspect on purpose: run_local.sh hard-exits "portal deps missing" unless fastapi+uvicorn import, so ./setup.sh (a network pip install) comes first. Then open the url in a real browser for the [JUDGMENT] rules.' },
       developers: [
         { id: 'portal_backend',  folder: 'standup/portal', role: 'Portal Dev — Backend & Jobs (FastAPI)', git: true, active: true, pair: 'portal_frontend', focus: 'parsers, the read+job API, the job lifecycle + guardrails', tests: 'pytest (portal/tests)' },
         { id: 'portal_frontend', folder: 'standup/portal', role: 'Portal Dev — Mission Control UI', git: true, active: true, pair: 'portal_backend', focus: 'the single-window page + the approve/reject affordances', tests: 'the python API contract tests' },
@@ -131,6 +166,73 @@ const TEAMS = (RAW.teams || [{ id: 'workspace', name: 'Workspace', mission: '', 
   .filter(t => t.developers.length > 0)
 const DEVS = TEAMS.flatMap(t => t.developers.map(d => ({ ...d, _team: t.id })))
 const STAFF = (RAW.staff || []).filter(s => s.active)
+const PM_AGENT = STAFF.find(s => s.id === 'pm_agent') || null
+const SUP_RUBRIC = (RAW.manager && RAW.manager.supervisor && RAW.manager.supervisor.rubric)
+  || 'Question every requirement; delete the part/step before optimizing it; simplify what survives. Be the validation bottleneck that contains error propagation; prefer subtraction to addition.'
+
+// ---- TRANSCRIPT VOCABULARY ----
+// This product's UI is a terminal transcript. The log stream below is the one surface every user
+// reads on every run, and it carries ZERO colour and ZERO ANSI — deliberately, so it survives a log
+// file, a CI capture, a screen reader and the portal. That leaves casing, indentation, separators
+// and terminality as the ONLY hierarchy devices available, which makes consistency in them the
+// whole design rather than a nitpick. These three helpers are the single definition of that
+// vocabulary; every stop, verdict and tally goes through them instead of hand-writing the strings.
+// (Six hand-written variants of one message IS the E-02 defect, committed while fixing E-02
+// defects.) NOTE the hard constraint on the shape: this engine is executed inside
+// `new Function(args, agent, parallel, pipeline, phase, log, workflow, budget, ...)` with NO
+// require/import, so a shared control/transcript.js module is not loadable here — a top-of-file
+// helper block is the only form available.
+
+// A verdict is typographically distinct from a step, on EVERY verdict: `→` introduces a verdict and
+// nothing else. It already meant that on three lines of this file and was missing from three more.
+const verdict = (subject, state, detail) => log(`  ${subject} → ${state}${detail ? `  ${detail}` : ''}`)
+
+// A run that STOPPED must not end in the shape of a run that FINISHED.
+// Loudness in a monochrome plaintext stream is position + shape + terminality, not capital letters:
+// a "loud stop" rendered as the 16th log line, in the same weight as `BOARD 5 item(s)`, is not
+// loud. So a stop prints a three-line block — what is wrong (with the offending value quoted) /
+// the enumerated valid set / the single fix naming the file — then the closing line, then nothing.
+// The enumeration is ALWAYS generated from the roster at runtime, never hardcoded: an error that
+// withholds the options just moves the guessing to the human, and a hardcoded list is one more
+// thing that drifts. The message is emitted through log() BEFORE the throw, because a thrown
+// workflow may surface to the user as nothing but a stack trace — which would discard the
+// naming-the-valid-options payoff that is the entire user-visible point of this.
+const stopTick = (what, validNoun, valid, fix) => {
+  log(`STOP — ${what}`)
+  log(`  valid ${validNoun}: ${(valid && valid.length) ? valid.join(', ') : '(none declared in the roster)'}`)
+  log(`  fix: ${fix}`)
+  log(`TICK STOPPED ${DATE} — ${what}`)
+  const e = new Error(`STOP — ${what} | valid ${validNoun}: ${(valid || []).join(', ')} | fix: ${fix}`)
+  e.tickStopped = true
+  throw e
+}
+
+// Every terminal status the Work loop can produce is accounted for BY NAME. The old closing line
+// counted `worked` as a denominator with only `committed` and `green` as numerators, so
+// "0 committed / 0 green of 2 worked" was emitted byte-identically for two tasks that ran fully and
+// failed review (an engineering signal) and two tasks never attempted at all (a routing signal
+// meaning the tick did nothing). Rendering two opposite realities the same way is the sibling of
+// the false-green this pipeline exists to delete. Statuses are enumerated FROM the records, so a
+// status added later can never become invisible here; `order` only sorts what is present.
+const tally = (records) => {
+  const by = new Map()
+  for (const r of records) { const s = (r && r.status) || 'unrecorded'; by.set(s, (by.get(s) || 0) + 1) }
+  const order = ['committed', 'green-not-committed', 'review-failed', 'supervisor-rejected',
+    'test-gate-failed', 'escalated-plan-rejected', 'escalated-intake', 'blocked-investigate',
+    'blocked', 'work-error']
+  const rank = k => { const i = order.indexOf(k); return i < 0 ? order.length : i }
+  return [...by.keys()].sort((a, b) => (rank(a) - rank(b)) || a.localeCompare(b))
+    .map(k => `${by.get(k)} ${k}`).join(' · ')
+}
+
+// ---- REVIEW SURFACE: observability is DECLARED, never inferred from vocabulary ----
+// It used to be a regex over the role/focus/task TEXT plus a frontend-path sniff. That is why a
+// squad whose product has no web words in its role description was invisible to the gate, and why
+// a non-web squad could be dragged toward a visual gate it can never satisfy. Now each squad
+// declares what its product FACE is. `none` is a DELIBERATE declaration; UNDECLARED is not none and
+// never reaches the gate silently (validateQueue stops the run and names the valid kinds).
+const SURFACE_KINDS = ['web', 'report', 'agent', 'api', 'cli', 'none']
+const surfaceOf = (teamId) => { const t = TEAMS.find(x => x.id === teamId); return (t && t.review_surface) || null }
 
 // ---- PERSONA injection (declared HERE, above every use, so it is never hit in its temporal
 //      dead zone) ----
@@ -186,7 +288,7 @@ const admitByRule = (list, what) => {
     else kept.push(it)
     for (const id of bad) if (!RULEBOOK_PROPOSALS.includes(id)) RULEBOOK_PROPOSALS.push(id)
   }
-  if (rejected.length) log(`E-01 admission: dropped ${rejected.length}/${rejected.length + kept.length} ${what} — ${rejected.map(r => r._inadmissible).join(' ; ')}`)
+  if (rejected.length) log(`E-01 ADMISSION dropped ${rejected.length} of ${rejected.length + kept.length} ${what} — ${rejected.map(r => r._inadmissible).join(' ; ')}`)
   return { kept, rejected }
 }
 
@@ -300,8 +402,17 @@ const PLAN_SCHEMA = {
 const CHALLENGE_SCHEMA = {
   type: 'object', required: ['approved', 'critique'],
   properties: { approved: { type: 'boolean' }, critique: { type: 'string' },
-    required_changes: { type: 'array', items: { type: 'string' } } },
+    required_changes: { type: 'array', items: { type: 'string' } },
+    blocking: { type: 'boolean', description: 'Required whenever approved=false: is the plan genuinely WRONG (true — code written against it would be thrown away), or is it sound with changes you want made (false)? Doctrine is that pairs CRITIQUE; a critique you judge non-blocking travels into IMPLEMENT as required_changes instead of ending the task.' } },
 }
+
+// The pair critiques; the pair does not hold a veto. Before this, `!challenge.approved`
+// ended the task outright — so a reviewer doing its job well ("direction is right, fix these
+// four things") killed the run exactly as hard as one finding a fatal design error, and
+// required_changes that were already written never reached the implementer.
+// Same shape as isBlocking above, on this schema's `approved` field; a null challenge
+// (agent died) still stops, because no verdict is not approval.
+const challengeBlocks = (v) => !v || (v.approved === false && v.blocking !== false)
 
 const WORK_SCHEMA = {
   type: 'object', required: ['task', 'status', 'summary'],
@@ -368,15 +479,137 @@ const DQ_SCHEMA = {
 
 const SUP_SCHEMA = {
   type: 'object', required: ['approve', 'note'],
-  properties: { approve: { type: 'boolean' }, note: { type: 'string' }, must_fix: { type: 'array', items: { type: 'string' } } },
+  properties: { approve: { type: 'boolean' }, note: { type: 'string' }, must_fix: { type: 'array', items: { type: 'string' } },
+    blocking: { type: 'boolean', description: 'Required whenever approve=false: must this genuinely STOP (true), or can the run continue carrying your note (false)? Wording tightenings, optional hardening, "this could be better", "one amendment away" are all false.' } },
+}
+
+// A gate that stops on ANY reserve is not a quality gate — it is a gate that never opens.
+// A conscientious reviewer marks approve=false the moment it sees anything improvable, so
+// "the more diligent the reviewer, the less can ever ship". Seen for real (2026-08-03): three
+// consecutive runs on one task, ~4.6M tokens, ZERO lines of code, while the supervisor's own
+// verdicts read "Fix the eight below and this ships — about a page of work, not a rewrite",
+// then "DIRECTION, GRAIN AND DATA PATH: APPROVED", then "DO NOT RE-PLAN. BUILD proceeds with
+// the must_fix applied." It said go three times and the gate stopped it three times.
+// So approve=false must now answer its own question: is this a REAL blocker?
+// Missing field still stops (strict by default) — silence is not consent to proceed.
+// A null verdict (the agent died) also stops: !!v short-circuits before the blocking check.
+const isBlocking = (v) => !!v && v.approve === false && v.blocking !== false
+
+// The INTAKE deliverable: a raw ask turned into an OUTCOME contract before anyone writes code.
+// Without this gate nothing in the pipeline ever asks "are we building the right thing" — every
+// other gate asks "did we build the thing right", which a plan solving the wrong problem passes.
+const CONTRACT_SCHEMA = {
+  type: 'object', required: ['goal', 'acceptance', 'verification', 'priority'],
+  properties: {
+    goal: { type: 'string', description: 'ONE sentence, an OUTCOME from the user experience back — not a restatement of the task' },
+    acceptance: { type: 'array', items: { type: 'string' }, description: 'concrete conditions; each one falsifiable' },
+    verification: { type: 'string', description: 'how "done" is PROVEN — which gate/command/artifact. A vibe is not a verification' },
+    priority: { type: 'string', enum: ['P0', 'P1', 'P2'] },
+    out_of_scope: { type: 'array', items: { type: 'string' } },
+  },
 }
 
 const progressFile = dev => `${dev.folder}/.standup/${dev.id}.md`
 
+// ---- ROUTING, PAIRING, FOLDER + SURFACE VALIDATION ----
+// Runs over the WHOLE queue BEFORE the Work loop, on BOTH entry paths, and before a single token
+// of agent spend.
+//
+// Deliberately hoisted OUT of the per-task try/catch in the Work loop. That catch exists for a
+// legitimate reason — one agent schema throw must not abort a whole tick — and it records
+// `work-error` and CONTINUES. A routing error thrown inside it would therefore produce a soft
+// record wearing a new label: a source-text fix with no behavioural change, i.e. exactly the
+// gate-that-never-fires being deleted here. Validating up front also means a misaimed run costs
+// nothing, and the operator learns at second 0 instead of after an hour of agents.
+//
+// ⚠️ CONSEQUENCE, stated rather than buried: an unroutable item aborts the WHOLE tick, discarding
+// the other queued items and the phases already spent. That is the intended trade — a board whose
+// assignees are LLM-synthesized (see the Synthesize phase) can produce a typo, and the honest
+// response to "I cannot tell who this is for" is to stop and say so, not to quietly do 1 of 2
+// tasks and report a clean tick.
+const resolveTask = (t) => {
+  // (a) assignee. Previously: a silent `status:'skipped'` + continue — a clean-looking tick that
+  // did nothing, which is precisely the harm this pipeline exists to prevent.
+  const dev = t.assignee ? DEVS.find(d => d.id === t.assignee) : null
+  if (!dev) {
+    stopTick(
+      t.assignee ? `board item names assignee "${t.assignee}", who is not on the roster`
+                 : `board item "${String(t.task || '').slice(0, 60)}" names no assignee, so nobody owns it`,
+      'assignees', DEVS.map(d => d.id),
+      'correct the assignee on the board item, or add that developer to standup/team.json')
+  }
+  const team = TEAMS.find(x => x.id === dev._team)
+
+  // (b) pair. Previously: `(pair) || (any other squadmate) || dev` — the trailing `|| dev` made a
+  // developer CRITIQUE ITS OWN PLAN and review its own diff (the writer grading own work, which
+  // the review rule forbids), and the middle clause silently substituted an arbitrary squadmate
+  // for the declared pair, which is a lie about who reviewed. Both fallbacks are deleted.
+  const mates = team.developers.filter(x => x.id !== dev.id).map(x => x.id)
+  if (!dev.pair) {
+    stopTick(`developer "${dev.id}" declares no pair, so its plan and its diff would be reviewed by nobody but itself`,
+      `pairs for ${dev.id} on squad ${team.id}`, mates,
+      `set "pair" on ${dev.id} in standup/team.json (a lone developer cannot run this SDLC — the pair challenge and the diff review are two of its gates)`)
+  }
+  const lanemate = team.developers.find(x => x.id === dev.pair && x.id !== dev.id)
+  if (!lanemate) {
+    stopTick(`developer "${dev.id}" declares pair "${dev.pair}", who is not another ACTIVE developer on squad "${team.id}"`,
+      `pairs for ${dev.id} on squad ${team.id}`, mates,
+      `fix "pair" on ${dev.id} in standup/team.json (check the id spelling, and that the pair has active:true)`)
+  }
+
+  // (c) folder. A dev may own more than one repo; the roster's `folder` is single-valued. When a
+  // task names its own folder it must land inside what that dev DECLARES it owns, or anyone could
+  // aim the pipeline at any path. The resolved folder then flows into the DETERMINISTIC reviewer
+  // commands (`git -C <folder> diff`) — that is the whole point: with the folder hardcoded to the
+  // owner's, a correct change made in the other repo shows an EMPTY diff and is failed as
+  // review-failed. Omitting `folder` is byte-for-byte the previous behaviour.
+  const owned = [dev.folder, team.folder].concat(dev.also_owns || []).filter(Boolean)
+  if (t.folder && !owned.includes(t.folder)) {
+    stopTick(`task folder "${t.folder}" is not a directory "${dev.id}" declares it owns`,
+      `folders for ${dev.id}`, owned,
+      `use one of those, or add the directory to "also_owns" on ${dev.id} in standup/team.json`)
+  }
+  const folder = t.folder || dev.folder || team.folder || '.'
+
+  // (d) review surface. An UNDECLARED squad is reported LOUDLY — never silently treated as
+  // non-observable, which is how a whole product face ends up with no gate looking at it.
+  const surface = team.review_surface
+  if (!surface || !surface.kind) {
+    stopTick(`squad "${team.id}" declares no review_surface, so nothing knows what its product FACE is or how to inspect it`,
+      'kinds', SURFACE_KINDS,
+      'add review_surface {kind,label,url,inspect,how} to that squad in standup/team.json — "none" is a deliberate declaration; UNDECLARED is not')
+  }
+  if (!SURFACE_KINDS.includes(surface.kind)) {
+    stopTick(`squad "${team.id}" declares review_surface.kind "${surface.kind}", which is not a kind this engine knows`,
+      'kinds', SURFACE_KINDS, `correct review_surface.kind on squad ${team.id} in standup/team.json`)
+  }
+  if (surface.kind !== 'none' && !String(surface.inspect || '').trim()) {
+    stopTick(`squad "${team.id}" declares review_surface.kind "${surface.kind}" but no inspect command, so its surface cannot actually be looked at`,
+      'kinds', SURFACE_KINDS,
+      `add a runnable "inspect" to that squad's review_surface in standup/team.json (runnable from a clean checkout, or stating its own prerequisite inline), or declare kind "none"`)
+  }
+  return { task: t, dev, team, lanemate, folder, surface }
+}
+const validateQueue = (queue) => queue.map(resolveTask)
+
+// ---- SINGLE-TASK ENTRY (/work) ----
+// ONE SDLC definition, by construction. /work does not get its own pipeline: it builds a one-item
+// queue and runs the SAME Work loop the board path runs, so there is no second definition to keep
+// in sync and no way for the board path to bypass a gate the single-task path has (or the reverse).
+// The alternative — extracting the loop body into a function that two callers share — makes the
+// same claim but has to be RE-proven at every later edit; here there is physically only one loop.
+// Cost of that choice, stated: the upstream phases are skipped by guard rather than by structure,
+// so each guard is a place a future edit could reintroduce a divergence — which is why the judge
+// asserts BOTH paths reach INTAKE rather than asserting it once.
+const SINGLE = (A && A.task) ? (typeof A.task === 'string' ? { task: A.task } : A.task) : null
+
 // ---- Phase 0: COMMS (optional staff triage over a local inbox) ----
-phase('Comms')
+// Every upstream phase is guarded on SINGLE: /work is aimed at one named task, so the roster-wide
+// inventory (who did what since when), the design sweep and the board synthesis have nothing to
+// contribute and would be an hour of agents spent to rediscover the task the caller already named.
+if (!SINGLE) phase('Comms')
 let comms = null
-const triage = STAFF.find(s => s.id === 'comms_triage')
+const triage = SINGLE ? null : STAFF.find(s => s.id === 'comms_triage')
 if (triage) {
   comms = await agent(
     `You are the Comms Triage staff agent for this team. Folder: ${triage.folder} (relative to the project root). Date: ${DATE}.
@@ -393,10 +626,14 @@ Job: scan ${triage.folder}/inbox/ for any local message files (plain text / json
 }
 
 // ---- Phases 1+2: STANDUP -> TEAM SYNC, pipelined per squad ----
-phase('Standup')
-log(`Standup ${DATE} — ${TEAMS.length} squad(s), ${DEVS.length} devs, window="${SINCE}"${comms ? `, comms items: ${(comms.items || []).length}` : ''}`)
+// ALLCAPS at column 0 for a section noun, so the transcript's opening bookend rhymes with its
+// closing one (`TICK DONE` / `TICK STOPPED`) instead of being the one sentence-cased outlier.
+if (!SINGLE) {
+  phase('Standup')
+  log(`STANDUP ${DATE} — ${TEAMS.length} squad(s), ${DEVS.length} devs, window="${SINCE}"${comms ? `, comms items: ${(comms.items || []).length}` : ''}`)
+}
 
-const squads = (await parallel(TEAMS.map(team => async () => {
+const squads = SINGLE ? [] : (await parallel(TEAMS.map(team => async () => {
   const reports = (await parallel(team.developers.map(dev => () => {
     const lanemate = team.developers.find(x => x.id === dev.pair) || team.developers.find(x => x.id !== dev.id && x.folder === dev.folder)
     return agent(
@@ -449,9 +686,19 @@ const reports = squads.flatMap(s => s.reports)
 // NARRATION — log the CONCLUSION, never "starting X", and put the number that matters on the line.
 // A run spawns dozens of agents over an hour and used to say nothing on the happy path: you could
 // watch the whole progress tree without learning what design scored or which review blocked a task.
-log(`SQUADS ${squads.length} synced / ${reports.length} dev report(s): ` +
-  squads.map(s => `${s.team}=${(s.sync && s.sync.health) || '?'}`).join(' '))
-{
+if (!SINGLE) {
+  // Each squad's DECLARED review surface is printed here, with its inspect command verbatim, for a
+  // reason: once observability is roster-driven, a squad whose `kind` is wrong has no other way to
+  // become visible — which would be this same invisibility one layer up. Printing the command also
+  // means a reader can copy it without opening team.json.
+  log(`SQUADS ${squads.length} synced · ${reports.length} dev report(s): ` +
+    squads.map(s => { const sf = surfaceOf(s.team); return `${s.team}=${(s.sync && s.sync.health) || '?'} [${sf && sf.kind ? sf.kind : 'UNDECLARED'}]` }).join(' '))
+  for (const s of squads) {
+    const sf = surfaceOf(s.team)
+    if (sf && sf.kind === 'none') log(`  ${s.team} surface: none — declared as having no inspectable face`)
+    else if (sf && String(sf.inspect || '').trim()) log(`  ${s.team} surface [${sf.kind}] ${sf.label || ''} — inspect: ${sf.inspect}`)
+    else log(`  ${s.team} surface UNDECLARED — add review_surface {kind,label,url,inspect,how} in standup/team.json (valid kinds: ${SURFACE_KINDS.join(', ')})`)
+  }
   const _blk = squads.flatMap(s => ((s.sync && s.sync.blockers) || []).map(b => `[${s.team}] ${b}`))
   if (_blk.length) log(`BLOCKERS ${_blk.length} raised: ${_blk.slice(0, 3).join(' · ').slice(0, 220)}${_blk.length > 3 ? ` … +${_blk.length - 3}` : ''}`)
 }
@@ -463,8 +710,8 @@ log(`SQUADS ${squads.length} synced / ${reports.length} dev report(s): ` +
 //      act on it never read. Same defects found tick after tick, zero landed.
 // Now it runs before the board is synthesized, so its findings become QUEUE ITEMS on THIS tick's
 // board, and every one of them cites a DESIGN_RULEBOOK rule id (E-01) so it can be tracked.
-phase('Design')
-const DESIGN_LEADS = STAFF.filter(s => s.role && /design/i.test(s.role))
+if (!SINGLE) phase('Design')
+const DESIGN_LEADS = SINGLE ? [] : STAFF.filter(s => s.role && /design/i.test(s.role))
 const DESIGN_SCHEMA = {
   type: 'object', required: ['summary', 'tasks'], properties: {
     lens: { type: 'string' },
@@ -594,8 +841,15 @@ const design = critiques.length ? { leads: critiques } : null
 const DESIGN_TASKS = critiques.flatMap(c => (c.tasks || []).map(t => ({ ...t, _lead: c._lead })))
 
 // ---- Phase 3: SYNTHESIZE (EM board) ----
-phase('Synthesize')
-const board = await agent(
+// On the single-task path the "board" is the one task the caller named. It is synthesized rather
+// than agent-produced so that the Work loop below has exactly one input shape and one code path.
+if (!SINGLE) phase('Synthesize')
+const board = SINGLE ? {
+  summary: `single task (/work): ${SINGLE.task}`,
+  team_health: 'green',
+  todays_board: [{ ...SINGLE, autoworkable: true, priority: SINGLE.priority || 'P1', source: 'work' }],
+  blockers: [],
+} : await agent(
   `You are the Engineering Manager running standup for ${DATE} over ${squads.length} squads. Squad syncs:
 
 ${JSON.stringify(squads.map(s => ({ team: s.team, name: s.name, sync: s.sync })), null, 2)}
@@ -611,7 +865,7 @@ PM DISCIPLINE (you also wear the Product Manager hat — demanding, Jobs-grade '
 - Flag dated risks at the top of blockers.`,
   { label: 'em:synthesize', phase: 'Synthesize', effort: E_JUDGE, schema: BOARD_SCHEMA }
 )
-{
+if (!SINGLE) {
   const _items = (board && board.todays_board) || []
   log(`BOARD ${_items.length} item(s), ${_items.filter(t => t.priority === 'P0').length} P0, ` +
     `${_items.filter(t => t.autoworkable).length} autoworkable · team health ${(board && board.team_health) || '?'}` +
@@ -622,13 +876,13 @@ PM DISCIPLINE (you also wear the Product Manager hat — demanding, Jobs-grade '
 }
 
 // ---- Phase 3b: STAFF PULSE (light, every tick) — pm + design lenses ----
-phase('Staff Pulse')
+if (!SINGLE) phase('Staff Pulse')
 const PULSE_CONTEXT = JSON.stringify({
   date: DATE,
   board: board && { summary: board.summary, health: board.team_health, items: (board.todays_board || []).slice(0, 20), blockers: board.blockers },
   squads: squads.map(s => ({ team: s.team, name: s.name, health: s.sync && s.sync.health, board: (s.sync && s.sync.board) || [] })),
 }, null, 2)
-const pulseStaff = STAFF.filter(s => s.id === 'pm_agent' || s.id === 'product_qa' || /design/i.test(s.role || ''))
+const pulseStaff = SINGLE ? [] : STAFF.filter(s => s.id === 'pm_agent' || s.id === 'product_qa' || /design/i.test(s.role || ''))
 const staffPulse = (await parallel(pulseStaff.map(member => () => {
   const isPM = member.id === 'pm_agent'
   const isQA = member.id === 'product_qa'
@@ -663,35 +917,88 @@ Keep it tight: a headline, a few concrete observations, and 0-3 light board nudg
     { label: `pulse:${member.id}`, phase: 'Staff Pulse', model: MECH_MODEL, effort: E_MECH, schema: PULSE_SCHEMA }
   ).then(r => r ? { ...r, _staff: member.id } : null)
 }))).filter(Boolean)
-log(`STAFF PULSE ${staffPulse.filter(p => p.engaged).length}/${staffPulse.length} engaged: ` +
+if (!SINGLE) log(`STAFF PULSE ${staffPulse.filter(p => p.engaged).length} of ${staffPulse.length} engaged: ` +
   staffPulse.map(p => `${p._staff}${p.engaged ? '' : '(skip)'}`).join(' '))
 
 // ---- Phase 4: WORK — gated SDLC per task (serial; folders are shared) ----
 let worked = []
-if (DO_WORK) {
+if (DO_WORK || SINGLE) {
   phase('Work')
   const _autoworkable = (board.todays_board || []).filter(t => t.autoworkable)
   const queue = _autoworkable
     .sort((a, b) => (a.priority || 'P2').localeCompare(b.priority || 'P2'))
-    .slice(0, MAXTASK)
-  log(`WORK QUEUE ${queue.length} of ${_autoworkable.length} autoworkable board item(s) (cap=${MAXTASK})` +
-    (queue.length ? `: ${queue.map(t => `${t.assignee}/${String(t.task || '').slice(0, 50)}`).join(' | ')}` : ' — nothing autoworkable this tick'))
+    .slice(0, SINGLE ? 1 : MAXTASK)
+  // Routing/pairing/folder/surface are decided for the WHOLE queue here — before any agent runs.
+  const routed = validateQueue(queue)
+  log(`WORK QUEUE ${queue.length} of ${_autoworkable.length} autoworkable board item(s) (cap=${SINGLE ? 1 : MAXTASK})` +
+    (queue.length ? `: ${routed.map(r => `${r.dev.id}/${String(r.task.task || '').slice(0, 50)}`).join(' | ')}` : ' — nothing autoworkable this tick'))
 
-  for (const t of queue) {
+  for (const R of routed) {
+   const t = R.task
    try {
-    const dev = DEVS.find(d => d.id === t.assignee)
-    if (!dev) { worked.push({ task: t.task, assignee: t.assignee, status: 'skipped', reason: 'unknown assignee' }); continue }
-    const team = TEAMS.find(x => x.id === dev._team)
-    const lanemate = (team.developers.find(x => x.id === dev.pair)) || team.developers.find(x => x.id !== dev.id) || dev
-    const folder = dev.folder
+    const dev = R.dev, team = R.team, lanemate = R.lanemate, folder = R.folder, surface = R.surface
     const isGit = !!dev.git
-    const record = { task: t.task, assignee: dev.id, project: t.project, team: dev._team, folder, isGit }
-    log(`TASK ${dev.id} · ${folder} · ${String(t.task).slice(0, 90)}`)
+    const record = { task: t.task, assignee: dev.id, project: t.project, team: dev._team, folder, isGit, surface_kind: surface.kind }
+    log(`TASK ${dev.id} · ${folder} · [${surface.kind}] · ${String(t.task).slice(0, 90)}`)
+
+    // -- 0 INTAKE: the raw ask becomes an OUTCOME CONTRACT before anyone writes code --
+    // This gate is the only one in the pipeline that asks "are we building the RIGHT thing".
+    // Every other gate asks "did we build the thing right" — a question a plan that solves the
+    // wrong problem passes cleanly. It GATES rather than merely running: ONE autonomous revision
+    // against the supervisor's must_fix, ONE recheck, and if it is still unclear the task STOPS
+    // here and never reaches implement or commit. A phase that always passes is decoration.
+    const _pmPersona = PM_AGENT && PM_AGENT.persona ? `${PM_AGENT.persona}\n\n———————————————\n\n` : ''
+    const _pmCharter = (PM_AGENT && PM_AGENT.charter) || (PM_AGENT && PM_AGENT.focus)
+      || 'Demanding product review: say NO to scope that does not serve the goal; exactly one DRI; reason from the customer experience back; reject vague asks.'
+    let contract = await agent(
+      `${_pmPersona}You are the ${PM_AGENT ? PM_AGENT.role : 'Product Manager'} for this team. INTAKE for ${DATE}.
+PRODUCT-REVIEW RUBRIC: ${_pmCharter}
+Raw task (${t.priority || 'P1'}/${t.effort || 'M'}${t.source ? `, source ${t.source}` : ''}) assigned to "${dev.id}" in ${folder}: "${t.task}"
+${t.acceptance ? `The board already proposed an acceptance: ${t.acceptance}\n` : ''}${t.serves_goal ? `The board says it serves: ${t.serves_goal}\n` : ''}Turn it into an OUTCOME CONTRACT: a one-sentence goal stated as an OUTCOME reasoned back from the user's experience (never a restatement of the task), concrete falsifiable acceptance conditions, how "done" is PROVEN (which gate / command / artifact — a vibe is not a verification), and what is explicitly OUT of scope. No implementation, no code.
+If the ask is too vague to contract, say so in the goal rather than inventing a plausible one — the supervisor gate below exists to catch exactly that, and a fabricated contract wastes the whole pipeline downstream.`,
+      { label: 'intake:pm', phase: 'Work', effort: E_JUDGE, schema: CONTRACT_SCHEMA }
+    )
+    record.contract = contract
+    let intakeOk = await agent(
+      `You are the autonomous SUPERVISOR (Claude) — an evaluator agent, NOT a human. INTAKE checkpoint.
+RUBRIC: ${SUP_RUBRIC}
+Proposed contract: ${JSON.stringify(contract)}
+Is the scope clear, the priority right, and the verification REAL (a gate/command/artifact, not a vibe)? approve=false with must_fix if it is fuzzy, restates the task instead of naming an outcome, or its verification could not actually be run.
+If you set approve=false you MUST also answer blocking. blocking=true ONLY when the contract is genuinely unusable — work done against it would have to be THROWN AWAY, not amended. A contract that is "one amendment away", a wording objection, or a hardening you would like is blocking=FALSE, which lets the run continue with your must_fix attached to it. You are the DECIDER, not a commentator.`,
+      { label: 'sup:intake', phase: 'Work', effort: E_JUDGE, schema: SUP_SCHEMA }
+    )
+    // ANY reserve still earns a revision round — that is how the must_fix actually gets
+    // absorbed into the contract instead of being dropped on the floor. `blocking` decides
+    // only whether the run STOPS afterwards, not whether the objection is heard.
+    if (intakeOk && intakeOk.approve === false) {
+      contract = await agent(
+        `You are the ${PM_AGENT ? PM_AGENT.role : 'Product Manager'}. The supervisor flagged your contract. Revise it to address EVERY point: ${JSON.stringify(intakeOk.must_fix || [])}
+TASK: ${t.task}\nPREVIOUS CONTRACT: ${JSON.stringify(contract)}`,
+        { label: 'intake:pm:revise', phase: 'Work', effort: E_JUDGE, schema: CONTRACT_SCHEMA }
+      )
+      record.contract = contract
+      intakeOk = await agent(
+        `You are the autonomous SUPERVISOR (Claude). Re-check the REVISED contract: ${JSON.stringify(contract)}
+Your earlier objections: ${JSON.stringify((intakeOk && intakeOk.must_fix) || [])}. approve=false ONLY if it is still genuinely unclear.
+And answer blocking honestly, knowing the cost: blocking=true ENDS the run and hands the whole task to a human — nothing is investigated, planned, or built. If your remaining objection is a wording fix or a "would be better", that is blocking=false and the run continues carrying it.`,
+        { label: 'sup:intake:recheck', phase: 'Work', effort: E_JUDGE, schema: SUP_SCHEMA }
+      )
+      // `!intakeOk ||` is load-bearing: isBlocking(null) is false, and a dead agent must
+      // still stop the run — "no verdict" is not "approved".
+      if (!intakeOk || isBlocking(intakeOk)) {
+        record.status = 'escalated-intake'
+        record.reason = (intakeOk && intakeOk.note) || 'the outcome contract was still unclear after one revision'
+        verdict('intake', 'ESCALATED', `— ${String(record.reason).slice(0, 110)} (not investigated, not implemented, not committed)`)
+        worked.push(record); continue
+      }
+    }
+    verdict('intake', 'CONTRACT APPROVED', `— ${String((contract && contract.goal) || '').slice(0, 100)}`)
 
     // -- 0 INVESTIGATE (read-only: observe reality BEFORE planning — a plan from imagination is the #1 failure) --
     const evidence = await agent(
       `You are "${dev.id}" (${dev.role}) on squad ${dev._team}, folder ${folder}. INVESTIGATE — READ-ONLY, gather real evidence; make NO edits, write NO code.
 TASK: ${t.task} (${t.priority}/${t.effort}).
+APPROVED OUTCOME CONTRACT from INTAKE (this, not the task title, is what must be true at the end): ${JSON.stringify(contract)}
 Read your progress file ${progressFile(dev)} (if present), the project's README${dev.context ? `, ${dev.context}` : ''}, and the ACTUAL source/data the task touches${isGit ? `, git -C ${folder} log/status -- .` : ''}. Observe reality, not imagination — verify assumptions against the real code (e.g. which component/library actually renders a thing), because a plan built on a wrong assumption is the #1 failure.
 Judge FEASIBILITY, not readiness. Set task_kind='greenfield' if the task builds something NEW (a PoC, a new integration, a from-scratch module) — a ZERO baseline / "it doesn't exist yet" / a dirty branch is the EXPECTED starting point, NOT a blocker; else 'brownfield'. Set feasible=false ONLY if the task genuinely cannot be attempted (the data/API/permission it needs does not exist and cannot be obtained, or the task contradicts what the code/data shows). Report findings, files in play (for greenfield: where the new code will live), and risks.`,
       { label: `investigate:${dev.id}`, phase: 'Work', agentType: 'Explore', effort: E_MECH, schema: EVIDENCE_SCHEMA }
@@ -703,6 +1010,7 @@ Judge FEASIBILITY, not readiness. Set task_kind='greenfield' if the task builds 
     let plan = await agent(
       `You are "${dev.id}" (${dev.role}) on squad ${dev._team}. PLAN ONLY — write NO code, make NO edits.
 TASK: ${t.task} (${t.priority}/${t.effort}) in folder ${folder}.
+APPROVED OUTCOME CONTRACT from INTAKE — the plan must deliver THIS, and nothing in its out_of_scope: ${JSON.stringify(contract)}
 EVIDENCE from your INVESTIGATE (ground the plan in THIS, do not re-imagine): ${JSON.stringify(evidence)}
 Produce a step-by-step implementation plan: exact files to touch (for a greenfield task, the new files to create), the approach, which tests you will write or run (your lane's test gate: ${dev.tests || 'project test suite'}), and risks. Plans solving the wrong problem are the #1 failure — restate the task's intent in one sentence first.`,
       { label: `plan:${dev.id}`, phase: 'Work', effort: E_JUDGE, schema: PLAN_SCHEMA }
@@ -715,11 +1023,12 @@ Produce a step-by-step implementation plan: exact files to touch (for a greenfie
       `You are "${lanemate.id}" (${lanemate.role}), the PAIR of "${dev.id}" on squad ${dev._team}. Fresh-context plan review — you have NOT seen their reasoning, only the plan below. Catch wrong direction, wrong scope, missed risks, missing tests. Structured critique with specific required changes; do NOT rubber-stamp, and do NOT invent objections that don't affect correctness/direction.
 TASK: ${t.task}
 PLAN: ${JSON.stringify(plan, null, 2)}
-Check the actual code in ${folder} where the plan makes claims. approved=true only if direction AND test plan are sound.`,
+Check the actual code in ${folder} where the plan makes claims. approved=true only if direction AND test plan are sound.
+If you set approved=false you MUST also answer blocking. blocking=true ONLY when the plan is genuinely WRONG — code written against it would have to be thrown away, not amended. "Direction is right, fix these four things", missing tests you want added, a better alternative, or scope you would tighten are all blocking=FALSE: your required_changes then travel into IMPLEMENT and bind there. You critique; you do not veto.`,
       { label: `challenge:${lanemate.id}`, phase: 'Work', effort: E_JUDGE, schema: CHALLENGE_SCHEMA }
     )
     record.challenge = challenge
-    if (challenge && !challenge.approved) {
+    if (challenge && challenge.approved === false) {
       plan = await agent(
         `You are "${dev.id}". Your pair rejected your plan. Revise it to address EVERY required change, or push back with evidence only where they are factually wrong.
 TASK: ${t.task}\nORIGINAL PLAN: ${JSON.stringify(plan, null, 2)}\nCRITIQUE: ${JSON.stringify(challenge, null, 2)}`,
@@ -733,9 +1042,10 @@ TASK: ${t.task}\nREVISED PLAN: ${JSON.stringify(plan, null, 2)}\nYOUR EARLIER CR
       ) : null
       record.rechallenge = challenge
     }
-    log(`  plan ${challenge && challenge.approved ? 'APPROVED by the pair' : 'REJECTED by the pair'}` +
-      (challenge && challenge.required_changes && challenge.required_changes.length ? ` (${challenge.required_changes.length} required change(s))` : ''))
-    if (!challenge || !challenge.approved) { record.status = 'escalated-plan-rejected'; worked.push(record); continue }
+    verdict('plan', challenge && challenge.approved ? 'APPROVED by the pair'
+      : (challengeBlocks(challenge) ? 'REJECTED by the pair' : 'RESERVATIONS (non-blocking) — proceeding'),
+      (challenge && challenge.required_changes && challenge.required_changes.length ? `(${challenge.required_changes.length} required change(s))` : ''))
+    if (challengeBlocks(challenge)) { record.status = 'escalated-plan-rejected'; worked.push(record); continue }
 
     // -- 3 IMPLEMENT + TEST GATE (no commit) --
     const impl = await agent(
@@ -752,19 +1062,30 @@ Follow the folder's conventions.`,
     record.impl = impl
     if (!impl) { record.status = 'blocked'; worked.push(record); continue }
 
-    // OBSERVABLE = the change produces something a user can SEE (a chart, page, panel, flow,
-    // endpoint output). OWNER-AGNOSTIC on purpose: a BACKEND change that alters what renders is
-    // still observable. Detected from the role/lane/task text AND re-checked against the files
-    // actually changed, so a backend lane cannot quietly opt out of the visual gate.
-    // DELIBERATELY OVER-INCLUSIVE: because the role text counts, a UI-lane developer's change is
-    // treated as observable even when the diff looks like plumbing — a job-store refactor behind a
-    // board IS a rendering change. The cost of a false positive is one wasted verification; the
-    // cost of a false negative is shipping a broken screen. If your project has a lane that
-    // genuinely never renders anything, narrow the pattern here rather than teaching devs to write
-    // task titles that dodge it.
+    // OBSERVABILITY COMES FROM THE DECLARED SURFACE, NOT FROM WEB VOCABULARY.
+    // This used to be a regex over the role/focus/task TEXT. That is why a squad whose product has
+    // no web words in its description was invisible to the gate: the gate could only see the kinds
+    // of product whose vocabulary it had been taught, which is the same defect as judging the diff
+    // instead of the surface (E-05), one level up. The squad now DECLARES what its product face is.
+    //
+    // Two distinct decisions come out of it, and collapsing them was part of the old problem:
+    //   VISUAL_DQ  — does this change owe a LIVE, real-browser, click-through visual proof?
+    //   DESIGN_LENS — does a design-quality reviewer look at this change at all?
+    // A `cli` / `report` / `agent` / `api` squad owes no screenshot but still gets a design lens:
+    // its artifact is the OUTPUT of its declared inspect command (for this engine, the run's own
+    // transcript). Letting a non-web kind mean "no design lens" is how a product whose only surface
+    // is a terminal ends up governed by nothing at all.
+    //
+    // `_touchedFrontend` is RETAINED but DEMOTED from primary signal to ESCALATOR: declaration
+    // decides the default, and a diff that actually touches rendering still pulls in the visual
+    // gate. So `kind:'none'` does NOT mean "never visually gated" — it suppresses the visual gate
+    // UNLESS the diff itself touches rendering. Documented at the point of declaration too; a field
+    // whose documented meaning differs from its behaviour is the same false promise being retired.
     const _touchedFrontend = Array.isArray(impl.files_changed) && impl.files_changed.some(p =>
       /(?:^|\/)(?:frontend|web|ui|client|static|templates)\//i.test(String(p)) || /\.(?:jsx|tsx|vue|svelte)$/i.test(String(p)) || /\.html?$/i.test(String(p)) || /\.s?css$/i.test(String(p)))
-    const OBSERVABLE_DQ = /chart|dashboard|render|panel|button|click|screen|\bpage\b|\btab\b|modal|dialog|widget|visual|user (?:sees|clicks|views)|\bUI\b|frontend|endpoint/i.test(`${dev.role || ''} ${dev.focus || ''} ${t.task || ''}`) || _touchedFrontend
+    const VISUAL_DQ = surface.kind === 'web' || _touchedFrontend
+    const DESIGN_LENS = surface.kind !== 'none' || _touchedFrontend
+    const OBSERVABLE_DQ = VISUAL_DQ
 
     // -- 3.5 TEST GATE (deterministic: unit ALWAYS; integration if a suite exists; visual/E2E when OBSERVABLE; supervisor verifies HONESTY, not just the verdict) --
     const dq = await agent(
@@ -786,8 +1107,9 @@ Follow the folder's conventions.`,
     const _visualSatisfied = !OBSERVABLE_DQ || (dq && typeof dq.visual === 'string' && dq.visual.trim() &&
       !/^\s*(n\/?a|none|not applicable|n\.a\.)\s*$/i.test(dq.visual) &&
       !/\b(http\s*200|only unit|unit test|component test|offline render|prior screenshot)\b/i.test(dq.visual))
-    log(`  test gate ${dq && dq.ran && dq.passed ? 'PASS' : 'FAIL'} · supervisor ${dqOk && dqOk.approve ? 'approve' : 'reject'}` +
-      (OBSERVABLE_DQ ? ` · observable change → live visual proof ${_visualSatisfied ? 'present' : 'MISSING (unit tests do not count)'}` : ''))
+    verdict('test gate', dq && dq.ran && dq.passed ? 'PASS' : 'FAIL',
+      `supervisor ${dqOk && dqOk.approve ? 'approve' : 'reject'}` +
+      (OBSERVABLE_DQ ? ` · observable change, live visual proof ${_visualSatisfied ? 'present' : 'MISSING (unit tests do not count)'}` : ''))
     if (!(dq && dq.ran && dq.passed && dqOk && dqOk.approve && _visualSatisfied)) { record.status = 'test-gate-failed'; worked.push(record); continue }
 
     // -- 4 REVIEW: pair-review of the DIFF + fresh-context lenses (writer never grades own work) --
@@ -797,9 +1119,11 @@ Follow the folder's conventions.`,
     // green. Now: an OBSERVABLE change gets a 4th lens that runs the deterministic judge first and
     // then applies the [JUDGMENT] rules of DESIGN_RULEBOOK.md. It does not pass, it does not commit.
     const reviewPlan = [
-      ...(OBSERVABLE_DQ ? [{ kind: 'design-quality', run: () => agent(
-        `Fresh-context DESIGN-QUALITY review. You look ONLY at the UI this change affects and at the rulebook — never at the author's reasoning.
+      ...(DESIGN_LENS ? [{ kind: 'design-quality', run: () => agent(
+        `Fresh-context DESIGN-QUALITY review. You look ONLY at the surface this change affects and at the rulebook — never at the author's reasoning.
 FOLDER: ${folder}\nTASK: ${t.task}\nIMPLEMENTATION REPORT: ${JSON.stringify(impl)}
+THE SQUAD'S DECLARED REVIEW SURFACE: kind=${surface.kind}${surface.label ? `, ${surface.label}` : ''}${surface.url ? `, url ${surface.url}` : ''}
+  inspect: ${surface.inspect || '(none — kind is "none")'}${surface.how ? `\n  how: ${surface.how}` : ''}
 
 THE RULEBOOK IS THE ONLY CRITERION (do not invent your own): read DESIGN_RULEBOOK.md at the repo
 root. Every finding MUST cite a rule id (E-01) — a finding that cannot cite one is not a defect;
@@ -809,20 +1133,36 @@ ${RULE_ID_LIST}
 Need a new rule? Write "propose a new rule: <text>" and cite E-01. Do NOT mint an id here; a new
 rule must land in DESIGN_RULEBOOK.md before it can be cited.
 
-STEP 1 — run the deterministic judge (the referee, not an opinion; do NOT skip it):
+STEP 1 — run the deterministic judge for THIS surface's kind (the referee, not an opinion; do NOT skip it):
+${VISUAL_DQ ? `  This surface is VISUAL, so the judge is the design script:
     node standup/control/verify_design_quality.js <url of the page this change affects> --json /tmp/dq-${dev.id}.json
-  ${DESIGN_URL ? `URL to judge: ${DESIGN_URL} (navigate to the affected route).` : 'Derive the running instance URL from the project\'s own run method and START it if needed.'}
-  Record the exit code + per-rule counts in machine_gate.
+  ${DESIGN_URL ? `URL to judge: ${DESIGN_URL} (navigate to the affected route).` : surface.url ? `URL to judge: ${surface.url} (navigate to the affected route). Start it first with: ${surface.inspect}` : 'Derive the running instance URL from the project\'s own run method and START it if needed.'}
+  Record the exit code + per-rule counts in machine_gate (machine_gate.url = the URL you judged).
   Exit 0 = no violations · 1 = violations · 2 = the page could not be loaded (bad URL / server down) ·
   **4 = the JUDGE itself could not run** (Playwright/Chromium unavailable). 2 and 4 both mean the gate
   produced no verdict → pass=false with the reason, never a wave-through. For 4, say explicitly that
   it is the GATE that is broken, not the page — reporting it as a design violation points attention at
-  the wrong thing — and run the remediation command the script printed, then re-run; do NOT route around it.
+  the wrong thing — and run the remediation command the script printed, then re-run; do NOT route around it.`
+  : `  This surface is NOT visual (kind=${surface.kind}), so there is no screen to screenshot and
+  verify_design_quality.js does not apply — it probes a DOM. The squad's DECLARED inspect command is
+  the referee instead. RUN IT and record its exit code:
+    ${surface.inspect}
+  Put that command in machine_gate.url and ITS exit code in machine_gate.exit_code, with ran=true only
+  if you actually ran it. A non-zero exit forces pass=false in code, exactly as a failing design judge
+  does — which is the point of making \`inspect\` a declared, runnable field rather than prose.`}
 
-STEP 2 — judge the [JUDGMENT] rules the script cannot decide (B-03 color semantics, B-04 factory
-  defaults, B-05 indistinguishable near-duplicates, C-01 single focus, C-02 empty de-emphasis,
-  C-04 designed empty states, D-02 numeral typography, D-04 title/state separation) from a REAL
-  screenshot. Cite a rule id on every conclusion.
+STEP 2 — judge the rules a script cannot decide, and cite a rule id on every conclusion.
+${VISUAL_DQ ? `  The [JUDGMENT] rules for a screen (B-03 color semantics, B-04 factory defaults, B-05
+  indistinguishable near-duplicates, C-01 single focus, C-02 empty de-emphasis, C-04 designed empty
+  states, D-02 numeral typography, D-04 title/state separation), from a REAL screenshot you took.`
+  : `  Your artifact is the OUTPUT of the inspect command above (and, for this engine, the run's own
+  transcript) — read it the way a user reads a screen. The F rules of DESIGN_RULEBOOK.md govern
+  command-line and transcript surfaces: F-01 status must survive glyph loss (never emoji/colour
+  alone), F-02 a summary line accounts for every record it counts, F-03 one separator one meaning,
+  F-04 a verdict is typographically distinct from a step, F-05 a run that stopped must not end in the
+  shape of a run that finished, F-06 one name per concept across every printed surface, F-07 an error
+  names the valid set. A non-visual surface is NOT exempt from design; it was simply ungoverned until
+  these rules existed.`}
 
 STEP 3 — E-02: any rule id cited >=2 times means per-file tickets are FORBIDDEN. Say so in the
   verdict, and name where the shared component to change lives.
@@ -882,7 +1222,7 @@ Read the ACTUAL working-tree diff (git -C ${folder} diff -- . ; plus untracked f
             : mg.exit_code === 4 ? '4 — the JUDGE itself could not run (Playwright/Chromium missing); the gate is broken, not the page — install it and re-run'
             : mg.exit_code === 2 ? '2 — the page could not be loaded'
             : String(mg.exit_code)
-          log(`  design gate OVERRIDE: lens said pass but the judge exited ${_why} — forcing pass=false (E-07: any non-zero exit always fails)`)
+          verdict('design gate', 'OVERRIDE', `— the lens said pass but the judge exited ${_why}; forcing pass=false (E-07: any non-zero exit always fails)`)
         }
         _dqReview.pass = false
       }
@@ -903,8 +1243,9 @@ Read the ACTUAL working-tree diff (git -C ${folder} diff -- . ; plus untracked f
     // makes green unreachable).
     const green = reviews.length === reviewPlan.length && reviews.every(r => r.pass)
     record.green = green
-    log(`  review ${reviews.filter(r => r.pass).length}/${reviewPlan.length} pass (${reviewPlan.map(l => l.kind).join(', ')})` +
-      (green ? ' → GREEN' : ` → blocked by: ${reviews.filter(r => !r.pass).map(r => String(r.verdict || '').slice(0, 60)).join(' | ').slice(0, 160)}`))
+    verdict(`review ${reviews.filter(r => r.pass).length} of ${reviewPlan.length} pass (${reviewPlan.map(l => l.kind).join(', ')})`,
+      green ? 'GREEN' : 'BLOCKED',
+      green ? '' : `— ${reviews.filter(r => !r.pass).map(r => String(r.verdict || '').slice(0, 60)).join(' | ').slice(0, 160)}`)
 
     // -- 5 COMMIT on green (feature branch, no push) --
     if (green && isGit && impl.files_changed && impl.files_changed.length) {
@@ -930,9 +1271,14 @@ approve=false (with must_fix) if it does not deliver the goal, a gate was rubber
     record.status = (record.supervisor_final && record.supervisor_final.approve === false) ? 'supervisor-rejected'
       : (record.committed && record.committed.status === 'committed') ? 'committed'
       : (green ? 'green-not-committed' : 'review-failed')
-    log(`  → ${record.status}${record.committed && record.committed.commit ? ` ${record.committed.commit}` : ''}${record.committed && record.committed.branch ? ` @${record.committed.branch}` : ''}`)
+    verdict('task', record.status, `${record.committed && record.committed.commit ? `${record.committed.commit}` : ''}${record.committed && record.committed.branch ? ` @${record.committed.branch}` : ''}`.trim())
     worked.push(record)
    } catch (e) {
+      // A routing/pairing/folder/surface STOP is NOT a per-task error and must not be softened into
+      // one — it already printed its three-line block and TICK STOPPED, and the run ends here.
+      // (In practice validateQueue runs before this loop, so this is belt-and-braces against a
+      // later edit moving a stopTick() call inside the try.)
+      if (e && e.tickStopped) throw e
       // A single agent({schema}) throw must NOT abort the whole tick — record + continue.
       log(`  → work-error: ${String((e && e.message) || e).slice(0, 140)}`)
       worked.push({ task: t.task, assignee: t.assignee, team: t.team, status: 'work-error', error: String((e && e.message) || e) })
@@ -944,12 +1290,31 @@ approve=false (with must_fix) if it does not deliver the goal, a gate was rubber
 // A design critique that runs after the commit cannot block anything, which is the entire reason
 // the same defects survived tick after tick.
 
-log(`TICK DONE ${DATE} — ${worked.filter(Boolean).filter(w => w.status === 'committed').length} committed / ` +
-  `${worked.filter(Boolean).filter(w => w.green).length} green of ${worked.filter(Boolean).length} worked · ` +
-  `board ${((board && board.todays_board) || []).length} item(s) · design ${design ? `${DESIGN_TASKS.length} task(s) boarded` : 'no design lead active'}`)
+// THE CLOSING LINE. It used to read `N committed / M green of K worked`, which had two defects that
+// mattered more than their size. (1) `worked` counted records whose statuses the numerators could
+// not express, so `0 committed / 0 green of 2 worked` was emitted byte-identically for two tasks
+// that ran fully and failed review — an engineering signal — and two tasks never attempted at all,
+// a routing signal meaning the tick did nothing. (2) `/` carried two meanings four words apart:
+// "and" in `committed / green`, then the fraction in `green of worked`. Now: the leading number is
+// TASKS SEEN, every terminal status appears BY NAME with a count (see tally()), and `·` separates
+// independent facts while `/` never means "and" here again.
+const _worked = worked.filter(Boolean)
+// A run that STOPPED must not end in the shape of a run that FINISHED. A routing/pairing/folder/
+// surface stop throws and has already printed TICK STOPPED. The remaining stop-shaped ending is a
+// queue in which nothing survived INTAKE — nothing was investigated, implemented or committed, and
+// reporting that as DONE is the false green in miniature.
+if (_worked.length && _worked.every(w => w.status === 'escalated-intake')) {
+  log(`TICK STOPPED ${DATE} — ${_worked.length} task(s), all stopped at INTAKE: the outcome contract was still unclear after one revision, so nothing was investigated, implemented or committed`)
+} else {
+  log(`TICK DONE ${DATE} — ${_worked.length} task(s)${_worked.length ? `: ${tally(_worked)}` : ''} · ` +
+    `board ${((board && board.todays_board) || []).length} item(s) · design ${design ? `${DESIGN_TASKS.length} task(s) boarded` : 'no design lead active'}`)
+}
 
 return {
   date: DATE,
+  // Which entry path ran. Both run the SAME Work loop and the SAME gates; `work` skips only the
+  // roster-wide inventory phases, which have nothing to contribute to one named task.
+  mode: SINGLE ? 'work' : 'standup',
   comms,
   staffPulse,
   design,
@@ -969,6 +1334,11 @@ return {
     worked: worked.filter(Boolean).length,
     green: worked.filter(Boolean).filter(w => w.green).length,
     committed: worked.filter(Boolean).filter(w => w.status === 'committed').length,
+    // Named explicitly rather than folded into an "other" bucket: a task that stopped at INTAKE was
+    // never attempted, and a consumer that cannot tell it apart from a task that failed review is
+    // reading the same two opposite realities the old closing line rendered identically.
+    escalated_intake: worked.filter(Boolean).filter(w => w.status === 'escalated-intake').length,
+    by_status: worked.filter(Boolean).reduce((m, w) => { const s = w.status || 'unrecorded'; m[s] = (m[s] || 0) + 1; return m }, {}),
     design_tasks_boarded: DESIGN_TASKS.length,
     design_gated: worked.filter(Boolean).filter(w => w.design_gate).length,
   },

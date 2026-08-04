@@ -7,7 +7,7 @@ allowedTools: Read, Bash, Edit, Write, Task
 Run the regression eval suite. Read `evals/cases.json` (a `target` repo + a list of `cases`, each with `id`, `prompt`, and a `check` shell command). For EACH case, in order:
 
 1. Make an **isolated copy** of the target repo (e.g. `cp -r <target> /tmp/eval-<id>` or a git worktree) so cases never contaminate each other or the real repo.
-2. Run the case `prompt` through the **gated SDLC** in that copy — like `/agent-team:work`: plan → fresh-context pair challenge → implement + tests → 2-lens review. (You may SKIP the commit — eval scores the working result, not a commit.)
+2. Run the case `prompt` through the **gated SDLC** in that copy — like `/agent-team:work`: the canonical steps in `standup/team.json` → `manager.policy.sdlc_pipeline`, through review. (You may SKIP the commit — eval scores the working result, not a commit.) No lens count is named on purpose: green is derived from the lenses actually planned for the task.
 3. Run the case `check` shell command in that copy. Record **pass/fail** (check exit 0) + **duration** (and per-run cost if the run surfaced it).
 4. Tear down the throwaway copy.
 
