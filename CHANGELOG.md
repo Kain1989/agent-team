@@ -3,6 +3,67 @@
 All notable changes to the **agent-team** plugin. Format: [Keep a Changelog](https://keepachangelog.com/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] — 2026-08-06
+
+**`/add-project` and `/remove-project` — the four manual steps between "installed" and "working on
+your code" collapse into one command.**
+
+### The problem this solves
+
+Pointing the team at your own repo took four edits, in order, and getting any one wrong failed
+later, somewhere else, with an error about something different: clone the repo; add a squad with a
+paired set of developers whose `folder` is it; declare a `review_surface` with a runnable `inspect`;
+and add the clone to `.gitignore`. Three were documented in README. **The fourth was not** — and it
+is the one that bites quietly: the clone is a git repo inside this one, so a later `git add -A`
+records it as a **gitlink** (mode `160000`), a pointer to a commit nobody else can fetch. Nothing
+breaks at add time; it surfaces at commit time looking like a git problem.
+
+### What changed
+
+- **`/add-project <git-url> [name] [--kind K] [--inspect CMD]`** does all four and prints what is
+  now true, including the `/sync-roster` step — without which the two new developers do not exist as
+  agent types and `/team` cannot spawn them.
+- **`/remove-project <name>`** is the inverse. It **never deletes your repository**: removing a
+  squad is reversible, deleting a working tree is not, so it prints the path and leaves the
+  directory alone. It reports `evals` targets, staff `scope_folders`, and cross-squad `pair`
+  references **before** editing, because a dangling `pair` is something the engine stops a run on.
+- Both declare `allowedTools: Read, Bash, Edit` — **not `Write`**. `standup/team.json` is
+  hand-formatted and its `_comment` fields are the only place parts of the schema are documented; a
+  rewrite loses them silently.
+- **Headless is a first-class path.** A missing `--kind`/`--inspect` is a question in an interactive
+  session and a **refusal with a paste-ready re-run command** in a non-interactive one. A question
+  asked into `claude -p` is not a question, it is a hang that dies on a timeout with nothing to show.
+- `/help` now leads with **Setup**: whoever types `/help` most likely just installed this and has no
+  project, and the answer to their real question is `/add-project`.
+
+### `standup/control/verify_project.py`
+
+The four invariants are checked by code rather than by a checklist in a prompt, for the same reason
+`/eval`'s RUN/SKIP decision was moved out in 0.3.9: a prompt cannot run `git ls-files -s`. It exits
+1 naming the field to fix, and **2** — not 1 — when `standup/team.json` does not parse, because that
+is not "an invariant failed", it is "nothing can be checked and every other command is also broken".
+
+### Judges
+
+`test_add_project.sh` (7 checker branches, each with its own covering case) and
+`test_remove_project.sh`. The central assertion in the latter is **byte equality** of `team.json`
+after add → remove: that is what makes "surgical edit" testable rather than aspirational, and case B
+proves it earns its keep — a parse-and-dump removal still parses, still carries identical DATA, and
+is caught only by the byte compare. The judge says in its header that normalising before the compare
+would delete the only thing it checks.
+
+Neither judge can run the prompts themselves; both say so. They prove the invariants are checkable
+and that the checker has teeth on every branch. Whether a model follows the prompt is judged by a
+human walkthrough, which is the right instrument for that half.
+
+### `/sync-roster` prunes — verified, not assumed
+
+Open question from the batch-2 plan, now closed by measurement: `agents_gen.py` rewrites the agent
+directory and unlinks any file carrying its own `generated from team.json` header whose role left
+the roster. A hand-written def with no header survives. So `/remove-project` does **not** delete
+`.claude/agents/*.md` itself — and must not, since doing it by name would also catch a hand-written
+file that happened to collide.
+
 ## [0.3.9] — 2026-08-06
 
 **Deleting the sample — which the docs invite — broke the installer, five documents, and the eval

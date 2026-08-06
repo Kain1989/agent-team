@@ -141,10 +141,12 @@ Set up and verify:
 | command | what it does |
 |---|---|
 | `/init` | scaffold a team project into the current directory — engine, starter roster, sample app |
+| `/add-project <git-url>` | clone your repo in and give it a squad — the one command that points the team at your own code |
+| `/remove-project <name>` | remove a project's squad from the roster (never deletes your code) |
 | `/eval` | run the regression suite in `evals/cases.json` and score pass or fail |
 | `/help` | list every command with what it does |
 
-Those sixteen are every entry in `skills/`; nothing is omitted.
+Those eighteen are every entry in `skills/`; nothing is omitted.
 
 ---
 
@@ -266,13 +268,26 @@ merge; the trusted worker does that, and only after you approve. Nothing is ever
 
 ## Point it at your repo
 
-Four preconditions, then the team is working on your own code instead of the sample:
+```
+/add-project https://github.com/you/your-repo --kind web --inspect "npm start && open http://localhost:3000"
+/sync-roster
+/work "the first thing you want done"
+```
 
-1. Add a developer to a squad in `standup/team.json` whose `folder` is your repo.
-2. Give that squad a `review_surface` — the pipeline refuses to run against an assignee, a
-   pair, a folder or a review surface nobody declared.
-3. Make sure the repo has an `origin` remote.
-4. Run `/standup`, or submit a code task targeting `project:<your-folder>`.
+`/add-project` clones the repo in, creates a squad with a pair of developers pointed at it, records
+the `review_surface` (`kind` + `inspect`) the pipeline refuses to run without, and adds the clone to
+`.gitignore` so `git add -A` here does not record it as a gitlink. Those four used to be manual and
+order-dependent; three of them were documented and the fourth was not, which is how people ended up
+with a team aimed at a directory that was not there.
+
+`--kind` is one of `web report agent api cli none`. **`--inspect` is the load-bearing one** — the
+command a stranger runs to actually SEE the surface. `none` is an honest answer for something
+genuinely faceless; an invented `inspect` that does not run is worse, because the review gate keeps
+trying to cash it. Run `/sync-roster` afterwards: the new developers do not exist as agent types
+until you do.
+
+`/remove-project <name>` is the inverse. It never deletes your code — it prints the path and leaves
+the directory alone.
 
 ## Tests
 
