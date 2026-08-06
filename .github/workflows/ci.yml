@@ -33,6 +33,27 @@ jobs:
         # cannot catch the failure where the engine refuses to load the workflow. This can.
         run: node standup/control/check_workflow_parse.js standup/standup.workflow.js
 
+      - name: SDLC routing judge
+        # Loads the REAL engine and executes it — both entry paths must still reach INTAKE, and a
+        # mis-routed task must still stop rather than run the pipeline against the wrong repo.
+        # README has listed this under Tests since it was written; CI never ran it, so the one
+        # judge covering "the machine is aimed at the wrong thing" was itself unenforced.
+        run: node standup/control/tests/test_sdlc_routing.js
+
+      - name: Onboarding judges
+        # The paths a NEW user walks: the installer with the sample deleted, the five documents
+        # that state the demo-app precondition, and the eval gold-set's RUN/SKIP resolution.
+        # Each runs its own --self-test first, because a judge that has never been shown to fail
+        # is not a judge (E-03) — and each of these three caught a real defect in its own logic
+        # the first time it was pointed at the tree.
+        run: |
+          bash standup/control/tests/test_setup_guard.sh --self-test
+          bash standup/control/tests/test_setup_guard.sh
+          bash standup/control/tests/test_precondition_parity.sh --self-test
+          bash standup/control/tests/test_precondition_parity.sh
+          bash standup/control/tests/test_eval_resolver.sh --self-test
+          bash standup/control/tests/test_eval_resolver.sh
+
       - name: Design judge self-test
         # DESIGN_RULEBOOK E-03: prove the judge FAILS on deliberately broken UI. A design gate
         # that has never been shown to fail is not a gate — every verdict it gives is unreliable.

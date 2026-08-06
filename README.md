@@ -198,8 +198,9 @@ agent-team/
 │   ├── portal/         Mission Control: a FastAPI API and a no-build static UI
 │   └── control/        the job queue, the git-worktree lifecycle, the locked-down job gate,
 │                       verify_design_quality.js and check_workflow_parse.js
-├── demo-app/           the sample project the team works on (a small Python library)
-└── setup.sh            installs the portal (venv, deps, gate config, demo-app git)
+├── evals/              the regression gold-set + resolve_cases.py (which cases can run here)
+├── demo-app/           an OPTIONAL sample project (a small Python library) — safe to delete
+└── setup.sh            installs the portal (venv, deps, gate config, demo-app git if present)
 ```
 
 ## The gates
@@ -281,7 +282,13 @@ cd demo-app && python3 -m pytest -q                                       # the 
 node standup/control/verify_design_quality.js --self-test                 # the design judge can still fail
 node standup/control/check_workflow_parse.js standup/standup.workflow.js  # the engine still loads
 node standup/control/tests/test_sdlc_routing.js                           # both entry paths still reach intake
+bash standup/control/tests/test_setup_guard.sh                           # the installer survives a deleted demo-app
+bash standup/control/tests/test_precondition_parity.sh                   # every doc states the demo-app precondition the same way
+bash standup/control/tests/test_eval_resolver.sh                         # /eval says which cases it skipped, and why
 ```
+
+Each of those takes `--self-test`, which deliberately breaks the thing being judged and requires the
+judge to go red. Run it before trusting a green.
 
 Pass and failure counts are deliberately not printed here. A number copied into prose rots
 exactly the way a version number does; run the commands and read what they print.

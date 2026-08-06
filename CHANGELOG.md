@@ -3,6 +3,61 @@
 All notable changes to the **agent-team** plugin. Format: [Keep a Changelog](https://keepachangelog.com/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.9] — 2026-08-06
+
+**Deleting the sample — which the docs invite — broke the installer, five documents, and the eval
+suite. Two external teams stopped here.**
+
+### The problem this solves
+
+`demo-app/` is a sample. The README says to point the team at your own repo; deleting the sample
+afterwards is the obvious next move. It was never a supported path:
+
+- **`setup.sh` died, exit 128.** `set -euo pipefail` plus `git -C "$ROOT/demo-app" init` on a
+  directory that is not there is `fatal: cannot change to .../demo-app`, and the installer aborted
+  with nothing installed. Guarding only the `init` block was not enough — the bare-origin, `remote
+  add` and `push -u` lines that follow it were outside the block and produced the same fatal twice
+  more.
+- **One precondition, five documents, one of them right.** "If `demo-app/.git` is missing, init it"
+  appears in `skills/standup`, `skills/work`, `skills/team`, `.claude/commands/standup.md` and
+  `CLAUDE.md`. Exactly one — `skills/standup` — also said *"(and a `demo-app/` exists)"*. The four
+  that did not include `/work`, the most-used entry point of the three that dispatch work.
+- **`/eval` went silent.** The gold-set hardcoded `"target": "demo-app"` and both cases imported
+  `textkit`. With the sample gone there was no target, no case could run, and nothing said so. A
+  regression suite that reports nothing is indistinguishable from one nobody ran.
+
+### What changed
+
+- **`setup.sh`** guards the whole sample section, and says why it skipped. The guard opens *after*
+  `DEMO`/`ORIGIN` are assigned: under `set -u`, a `$DEMO` referenced outside its own guarded block
+  is an unbound-variable abort — the same closed door one line further down.
+- **All five documents** now either carry the existence guard verbatim or delegate to the one copy
+  that does. Editing `/standup` or `/portal` means editing both their skill and their
+  `.claude/commands/` file; that pair had already drifted, which is how this was found.
+- **`evals/resolve_cases.py`** decides RUN vs SKIP in code rather than in a prompt. Cases declare
+  `requires`; a missing directory is a stated skip with a reason, never a pass, and "0 runnable" is
+  printed as a complete answer with instructions for making it runnable.
+
+### Judges (each proved it could fail before it was trusted)
+
+- `standup/control/tests/test_setup_guard.sh` — slices section 5 out of the real `setup.sh` by its
+  own marker comments, so it tests shipped text rather than a copy that drifts; a missing marker is
+  exit 3, never a skip.
+- `standup/control/tests/test_precondition_parity.sh` — **discovers** the sites by walking the tree
+  instead of holding a list, because the sixth document, written next month by someone who never
+  read the judge, is exactly the one a list cannot see (`E-05`, aimed at documentation).
+- `standup/control/tests/test_eval_resolver.sh` — fixtures only; the repo tree is read, never written.
+- CI now runs all three (each `--self-test` first) **and `test_sdlc_routing.js`**, which README had
+  listed under Tests since it was written while CI never ran it — the one judge covering "the machine
+  is aimed at the wrong thing" was itself unenforced.
+
+Writing the judges caught three defects in the judges themselves, each the same shape as the bug
+being fixed: the parity judge matched line by line and silently found 4 of 5 sites (`skills/work`
+wraps "is" / "missing:" across a newline); it then failed a correctly-guarded paragraph because the
+guard phrase straddled a line while discovery did not; and the eval judge's self-test reported PASS
+off an unrelated failure while its mutation quietly no-opped. Under-discovery and false-attribution
+in a judge read as green, which is why each one is now asserted by name.
+
 ## [0.3.8] — 2026-08-05
 
 **The exemption that let dev agents write at all was documented in three places and armed by none.**
