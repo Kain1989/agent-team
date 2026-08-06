@@ -137,11 +137,24 @@ run_cases() { # <mode> <label-prefix>
   local OURS_TEAMS="portal" OURS_DEVS="portal_backend,portal_frontend"
 
   section "${pfx}A. cwd sits ABOVE the install and a decoy occupies the name — the engine must REFUSE"
-  # The honest architecture, stated because it is easy to overclaim: when a second agent-team tree
-  # sits AT or ABOVE cwd, no amount of path resolution can tell which one the run meant — the decoy
-  # is a perfectly valid anchor, and the walk finds it first. Resolution narrows the hijack surface;
-  # it does not close it. What closes it is the engine refusing an arm whose tree does not match the
-  # roster in memory. So this case asserts DETECTION, not prevention, and the flag genuinely does
+  # WHAT THE TWO HALVES ACTUALLY COVER — and they are DISJOINT SETS, not a layered defence. An
+  # earlier draft of this comment said "resolution narrows the surface; identity closes it", which
+  # is backwards for the case that was actually observed:
+  #
+  #   * RESOLUTION (walk up for two anchor files) is what kills the CASE-FOLDING hijack — the real
+  #     one, seen on this machine, where `standup/` resolved into a differently-cased sibling.
+  #   * IDENTITY (compare the armed tree's ids to the roster in memory) is what catches a
+  #     CROSS-PROJECT decoy — a neighbour whose roster differs.
+  #   * NEITHER catches a TWIN: two checkouts of the SAME repo. Identical rosters, so identity
+  #     agrees; a valid anchor, so resolution accepts. The run arms the wrong tree and logs
+  #     `verified`. That is not exotic — it is the most likely two-tree layout for a published
+  #     plugin (a marketplace install beside a git clone of the same project).
+  #
+  # KNOWN GAP, not covered here: closing the twin case needs a RUN-SCOPED fact — a nonce written by
+  # the engine and read back, or the realpath+size of the running standup.workflow.js. Deliberately
+  # not built in this batch; recorded so nobody reads the checks below as covering it.
+  #
+  # This case therefore asserts DETECTION of the cross-project decoy, not prevention: the flag does
   # land in the neighbour before the run stops.
   d="$(build_fixture)"
   simulate_arm "$d" "$d" "$mode"
@@ -208,6 +221,29 @@ source_checks() {
   check "the engine never needs fs for arming" \
     "$(sed -n '/async function armTeamRunExemption/,/^}/p' <<<"$src" | grep -q "node:fs" && echo 0 || echo 1)" \
     "filesystem access has never been observed in the real host"
+
+  # ---- the PROMPT's own resolution rule ----
+  # The reviewer's Mutation B gutted the walk in the shipped prompt down to a bare
+  # `if [ -d "$D/standup" ]`, re-enabling the case-folding hijack on this machine, and all five
+  # commands stayed green — the simulation above tests a bash REIMPLEMENTATION of the walk, not the
+  # text the agent is actually handed. These greps read the shipped prompt.
+  local armprompt; armprompt="$(sed -n '/RELATIVE PATHS ARE THE HAZARD HERE/,/Do nothing else/p' <<<"$src")"
+  [[ -n "$armprompt" ]] || die_judge "could not slice the Arm prompt out of the engine — re-anchor this check"
+  # Grep the RESOLUTION TEST itself, not the prompt at large: both filenames also appear in the
+  # reporting step, so a loose grep passed even with the walk gutted to `if [ -d "$D/standup" ]`.
+  check "the prompt requires BOTH anchor files, not just a standup/ directory" \
+    "$(grep -qF '[ -f "$D/standup/team.json" ] && [ -f "$D/standup/standup.workflow.js" ]' <<<"$armprompt" && echo 1 || echo 0)" \
+    "a bare -d standup/ test matches any neighbour that merely has the directory"
+  check "the prompt walks UP rather than trusting cwd" \
+    "$(grep -q 'dirname' <<<"$armprompt" && echo 1 || echo 0)"
+  check "the prompt stops at the FIRST match (nested installs: nearest wins)" \
+    "$(grep -qi 'first' <<<"$armprompt" && echo 1 || echo 0)"
+  check "the prompt forbids inventing a directory when no root resolves" \
+    "$(grep -qi 'do not .*mkdir\|Do not invent' <<<"$armprompt" && echo 1 || echo 0)"
+  check "the prompt verifies via the flag reader, not ls" \
+    "$(grep -q 'team_run_active PRESENT' <<<"$armprompt" && echo 1 || echo 0)"
+  check "the prompt asks for the ids the engine will assert on" \
+    "$(grep -q 'team_ids' <<<"$armprompt" && grep -q 'dev_ids' <<<"$armprompt" && echo 1 || echo 0)"
 }
 
 self_test() {

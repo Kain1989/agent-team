@@ -327,10 +327,24 @@ async function runCases(src) {
   section('C4. An undispatchable roster stops before any phase');
   {
     const { hooks } = host(() => undefined);
-    const stopOf = async (args) => {
-      try { await makeRunner(src, hooks)(args); return ''; }
-      catch (e) { return String(e.message); }
+    // `rec` is captured, not just the message. The first version of this group asserted that the
+    // THROWN TEXT did not contain "team_run_active" — which is true whether Arm ran or not, and was
+    // measured PASSing with both guards neutralised while `em:synthesize` actually executed. Arm
+    // writing the exemption and switching the user's supervisor gate off for six hours is the most
+    // consequential thing A2 exists to prevent, and it was the one check here with no teeth.
+    // The host must ANSWER the roster-wide phases. With `host(() => undefined)` every agent throws
+    // the sentinel, the run dies at `em:synthesize`, and Arm is unreachable whatever the guards do —
+    // so the Arm assertion below passed identically with the guards on and off. Measured: standalone
+    // (answering stub) both-guards-off DOES reach `arm:team_run_active`; inside the sentinel host it
+    // never gets past Synthesize. A check whose subject the harness cannot reach is not a check.
+    const runOf = async (args) => {
+      const { rec: r, hooks: h } = host((label, assignee, extra) =>
+        standupPhaseReply(label, assignee, extra));
+      let msg = '';
+      try { await makeRunner(src, h)(args); } catch (e) { msg = String(e.message); }
+      return { msg, labels: r.labels, phases: r.phases };
     };
+    const stopOf = async (args) => (await runOf(args)).msg;
     const noRoster   = await stopOf({ date: 'D', work: true, maxTasks: 1 });
     const emptyObj   = await stopOf({ date: 'D', roster: {}, work: true, maxTasks: 1 });
     const emptyTeams = await stopOf({ date: 'D', roster: { teams: [], staff: [] }, work: true, maxTasks: 1 });
@@ -345,7 +359,12 @@ async function runCases(src) {
     check('an ALL-INACTIVE roster stops too (same state, not a different one)',
       /no ACTIVE developer/.test(inactive), inactive.slice(0, 70));
     check('the stop names the command that fixes it', /add-project/.test(emptyObj), emptyObj.slice(0, 90));
-    check('Arm never runs on a roster that cannot dispatch', !/team_run_active/.test(emptyObj));
+    const emptyRun = await runOf({ date: 'D', roster: {}, work: true, maxTasks: 1 });
+    check('Arm never runs on a roster that cannot dispatch',
+      !emptyRun.labels.includes('arm:team_run_active') && !emptyRun.phases.includes('Arm'),
+      `labels=[${emptyRun.labels.join(',')}] phases=[${emptyRun.phases.join(',')}]`);
+    check('and no agent runs at all on such a roster', emptyRun.labels.length === 0,
+      `labels=[${emptyRun.labels.join(',')}]`);
   }
 
   // ═══ D. Routing is a gate, not a guess ═══
@@ -609,6 +628,60 @@ async function runCases(src) {
     }
   }
 
+  // ═══ C5. Arm identity — the half no self-check can cover ═══
+  // The Arm agent verifies its own work by asking the flag helper it just used, and a NEIGHBOURING
+  // install's helper answers `team_run_active PRESENT` perfectly truthfully — about the wrong repo.
+  // So the only thing that can catch a mis-armed run is a fact the writer never had: the roster
+  // THIS run was handed. Until this group existed, every case in this file stubbed Arm without ids,
+  // so the `verified` and the throw branches were never executed anywhere in the repo — the
+  // load-bearing half of the fix had zero executable coverage while five commands reported green.
+  section('C5. Arm asserts WHICH install it armed');
+  {
+    const expectTeams = (roster.teams || []).map(x => x.id).filter(Boolean).sort().join(',');
+    const expectDevs = (roster.teams || [])
+      .flatMap(x => x.developers || []).map(d => d.id).filter(Boolean).sort().join(',');
+
+    const armWith = async (extra) => {
+      const { rec, hooks } = host((label) => {
+        if (label === 'arm:team_run_active') {
+          return Object.assign({ flag_present: true, set_by_me: true, detail: 'STUBBED' }, extra);
+        }
+        if (label === 'intake:pm') return okContract;
+        if (label === 'sup:intake') return { approve: true, note: 'ok' };
+        if (label.startsWith('investigate:')) throw new Error(STOP_AT_INVESTIGATE);
+        return undefined;
+      });
+      let err = null;
+      try { await makeRunner(src, hooks)({ date: 'D', roster, task: TASK }); } catch (e) { err = e; }
+      return { err, reachedDev: rec.labels.some(l => /^(investigate|implement|plan):/.test(l)), rec };
+    };
+
+    // The neighbour: a real install, correctly armed, wrong tree.
+    const wrong = await armWith({ resolved_root: '/somewhere/else', flag_realpath: '/somewhere/else/standup/control/team_run_active',
+                                  team_ids: 'neighbour', dev_ids: 'nb_a,nb_b' });
+    check('an arm on a DIFFERENT install throws',
+      !!wrong.err && /ARM armed the WRONG install/.test(String(wrong.err.message)),
+      wrong.err ? String(wrong.err.message).slice(0, 52) : 'did not throw');
+    check('and no dev agent runs after a mis-armed exemption', !wrong.reachedDev,
+      'the gate would be off THERE and on HERE — every write blocked, reported as review-failed');
+    check('the throw names both rosters so it is diagnosable',
+      !!wrong.err && /neighbour/.test(String(wrong.err.message)) && new RegExp(expectTeams.split(',')[0]).test(String(wrong.err.message)));
+
+    // The matching case — this is what executes the `verified` branch.
+    const right = await armWith({ resolved_root: '/here', team_ids: expectTeams, dev_ids: expectDevs });
+    check('a MATCHING roster passes identity and the run proceeds',
+      !right.err || !/ARM armed the WRONG install/.test(String(right.err.message)),
+      right.err ? String(right.err.message).slice(0, 40) : 'no throw');
+    check('and it reaches a dev agent', right.reachedDev);
+
+    // No ids reported: `unverified`, and deliberately NOT fatal — an older arm step that cannot
+    // report ids must not brick every run.
+    const silent = await armWith({});
+    check('an arm that reports no ids is unverified, not fatal',
+      !silent.err || !/ARM armed the WRONG install/.test(String(silent.err.message)));
+    check('and the run still proceeds on it', silent.reachedDev);
+  }
+
   section('I. The engine still loads in the host');
   {
     let loadErr = null;
@@ -673,6 +746,26 @@ const FIXTURES = [
   // only the missing-roster case: the empty and all-inactive shapes are caught by the OTHER branch,
   // which was still live. That is the same "a branch with no independent covering case" defect the
   // eval judge shipped once, so each guard gets its own tooth.
+  // The reviewer's Mutation A. It survived FIVE green commands before this fixture existed: the
+  // string 'ARM armed the WRONG install' stayed in the file, so a grep-based source check passed
+  // while the branch became unreachable — exactly what this judge's own header forbids.
+  { name: 'arm-identity-assertion-neutralized',
+    why: 'the engine stops comparing the armed tree against the roster it was handed, so a run that armed a NEIGHBOURING install reports success and every dev write is blocked here',
+    must_red: ['an arm on a DIFFERENT install throws',
+               'and no dev agent runs after a mis-armed exemption'],
+    from: `} else if (armTeams !== ARM_EXPECT_TEAMS || armDevs !== ARM_EXPECT_DEVS) {`,
+    to:   `} else if (false) {` },
+  // BLOCK-3's fixture: the Arm check in C4 used to assert on thrown TEXT and passed with BOTH
+  // guards off while em:synthesize actually ran. Now it reads the recorded labels/phases.
+  { name: 'both-roster-guards-neutralized',
+    why: 'an undispatchable roster runs phases again — including Arm, which writes the exemption into the user project and switches their supervisor gate off for six hours — then prints TICK DONE with 0 tasks',
+    must_red: ['Arm never runs on a roster that cannot dispatch',
+               'and no agent runs at all on such a roster',
+               'a missing roster stops the run'],
+    from: `if (ROSTER_ERROR) {`,
+    to:   `if (false) {`,
+    from2: `if (!DEVS.length) {`,
+    to2:   `if (false) {` },
   { name: 'roster-missing-guard-neutralized',
     why: 'a run handed no roster proceeds again — it used to silently work a hardcoded team instead of standup/team.json and report green',
     must_red: ['a missing roster stops the run'],
@@ -746,6 +839,19 @@ async function selfTest() {
         continue;
       }
       src = src.replace(f.from, f.to);
+    }
+    // A SECOND anchor, for defences that come in pairs. Neutralising one branch of a two-branch
+    // guard leaves the other catching everything, the fixture reddens nothing it claims, and the
+    // pair reads as covered — this project has shipped that mistake four times. `from2` makes
+    // "turn the whole defence off" expressible instead of approximated.
+    if (f.from2) {
+      if (!src.includes(f.from2)) {
+        console.error(`  ${f.name} → ERROR  second mutation anchor not found:`);
+        console.error(`      ${JSON.stringify(f.from2.slice(0, 90))}`);
+        broken++;
+        continue;
+      }
+      src = src.replace(f.from2, f.to2);
     }
     if (f.roster) {
       // A roster-shaped fixture mutates the file on disk's parsed copy for the duration of one run.

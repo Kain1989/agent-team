@@ -33,6 +33,10 @@ export const meta = {
 // it just quietly stops doing the thing you asked for. So: unparseable args THROW.
 // The real cure is on the calling side — hand the Workflow tool an OBJECT, not a JSON string;
 // objects never pass through hand-written escaping, so the failure mode disappears at source.
+// NOTE the second line of defence, added later: there is no longer any embedded roster to fall
+// back to, so a nulled `args` now stops at the roster guard instead of quietly polling a hardcoded
+// team. Both gates are load-bearing — the throw here is what keeps the DIAGNOSIS right. Soften it
+// and the user is told "args.roster was not provided" when the real fault was a stray quote.
 let A = args
 if (typeof A === 'string') {
   try { A = JSON.parse(A) }
@@ -150,6 +154,17 @@ if (RAW && typeof RAW !== 'object') {
   ROSTER_ERROR = `args.roster was a ${typeof RAW}, not an object`
   RAW = null
 }
+// `{teams: "..."}` used to escape the stop vocabulary entirely: `.map` on a string threw a bare
+// TypeError, which still halts the run but in the shape of a crash rather than the three-line block
+// the reader is meant to get. Shape-check the two fields the engine actually walks.
+if (RAW && RAW.teams !== undefined && !Array.isArray(RAW.teams)) {
+  ROSTER_ERROR = `args.roster.teams was a ${typeof RAW.teams}, not an array`
+  RAW = null
+}
+if (RAW && RAW.staff !== undefined && !Array.isArray(RAW.staff)) {
+  ROSTER_ERROR = `args.roster.staff was a ${typeof RAW.staff}, not an array`
+  RAW = null
+}
 if (!RAW) {
   if (!ROSTER_ERROR) ROSTER_ERROR = 'args.roster was not provided'
   RAW = {}
@@ -195,7 +210,11 @@ const stopTick = (what, validNoun, valid, fix) => {
   log(`  valid ${validNoun}: ${(valid && valid.length) ? valid.join(', ') : '(none declared in the roster)'}`)
   log(`  fix: ${fix}`)
   log(`TICK STOPPED ${DATE} — ${what}`)
-  const e = new Error(`STOP — ${what} | valid ${validNoun}: ${(valid || []).join(', ')} | fix: ${fix}`)
+  // Same rendering on both surfaces. The log said "(none declared in the roster)" while the thrown
+  // Error carried an empty string — and the caller sees the Error, so the one audience that gets a
+  // stack trace got the degraded version of the message.
+  const validText = (valid && valid.length) ? valid.join(', ') : '(none declared in the roster)'
+  const e = new Error(`STOP — ${what} | valid ${validNoun}: ${validText} | fix: ${fix}`)
   e.tickStopped = true
   throw e
 }
@@ -276,8 +295,15 @@ const personaOf = (m) => (m && m.persona) ? (m.persona + '\n\n——————
 const RULEBOOK_PATHS = ['DESIGN_RULEBOOK.md', '../DESIGN_RULEBOOK.md', 'standup/../DESIGN_RULEBOOK.md']
 // Fallback ONLY. The FILE is the source of truth; a silently-embedded copy drifting from the
 // rulebook is the same disease the roster fallback above was deleted for.
+// Regenerated from DESIGN_RULEBOOK.md. It had drifted SEVEN rules behind (stopped at E-07 while
+// the rulebook defines through F-07), and this commit makes the fallback MORE reachable — a
+// rejected neighbour rulebook now lands here too. Under the no-fs degrade the design lens would
+// be told only 25 ids are citable, and E-01 would reject every F-* finding, including the F
+// rules this repo's own judges cite. A drifting embedded copy is precisely the disease the
+// roster fallback above was deleted for.
 const EMBEDDED_RULE_IDS = ['A-01','A-02','A-03','A-04','B-01','B-02','B-03','B-04','B-05','B-06',
-  'C-01','C-02','C-03','C-04','D-01','D-02','D-03','D-04','E-01','E-02','E-03','E-04','E-05','E-06','E-07']
+  'C-01','C-02','C-03','C-04','D-01','D-02','D-03','D-04','E-01','E-02','E-03','E-04','E-05',
+  'E-06','E-07','F-01','F-02','F-03','F-04','F-05','F-06','F-07']
 
 // ---- WHICH rulebook, and PROVING it is this install's ----
 // These candidates are RELATIVE, and relative to a cwd this engine does not control. Measured on
@@ -354,6 +380,10 @@ if (!_fsMod || typeof _fsMod.readFileSync !== 'function') {
   }
 }
 if (!RULE_IDS) RULE_IDS = new Set(EMBEDDED_RULE_IDS)
+// LOGGED, not merely returned. This value only ever entered the result object, which is exactly why
+// "27 recorded runs carry no evidence of whether this harness has filesystem access" was true and
+// would have stayed true. One line turns the next real tick into that evidence.
+log(`RULEBOOK: ${RULE_IDS.size} citable rule id(s) — source: ${RULE_IDS_SOURCE}`)
 const RULE_ID_LIST = [...RULE_IDS].sort().join(' ')
 
 // Detection is DELIBERATELY wider than the legal set: an invented "F-99" must register as a

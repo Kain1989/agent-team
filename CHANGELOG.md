@@ -8,6 +8,15 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 **Four engine defects that all had the same shape: the apparatus was pointed at the wrong thing and
 did not error.**
 
+> **RELEASE CONSTRAINT — ship this together with the `/add-project` release, never alone.** The
+> empty-roster stop tells the reader `add a project with /add-project <git-url>`, and that command
+> ships in the sibling change, not this one. On its own this version would recommend a command it
+> does not provide, and `test_sdlc_routing.js` pins the string (`the stop names the command that
+> fixes it`) — so the false promise is held in place by a judge. An error message that names a
+> nonexistent command is worse than one that offers no suggestion: it costs the reader a search
+> before they learn there was nothing to find. If this ever has to be reverted alone, that string
+> must be changed in the same commit.
+
 ### The problem this solves
 
 - **A run handed no roster worked a different team and reported green.** `EMBEDDED_ROSTER` was a
@@ -63,10 +72,28 @@ needs no `fs` at all (the agent's bash does the resolving), and the rulebook rea
 a **degrade** — embedded ids, and the source says so plainly — never a stop. Failing every
 code-writing run over a design-rule id list would trade a silent bug for an outage.
 
+### What the identity assertion does and does not cover
+
+Stated because the first draft of this claim was **backwards**. Resolution and identity cover
+**disjoint** sets, not two layers of one defence:
+
+- **resolution** (walk up for two anchor files) kills the **case-folding hijack** — the one actually
+  observed, where `standup/` resolved into a differently-cased sibling;
+- **identity** (compare the armed tree's ids against the roster in memory) catches a
+  **cross-project decoy**, a neighbour whose roster differs;
+- **neither catches a TWIN** — two checkouts of the same repo. Identical rosters, so identity
+  agrees; a valid anchor, so resolution accepts. The run arms the wrong tree and logs `verified`.
+  That is the most likely two-tree layout for a published plugin: a marketplace install beside a
+  git clone of the same project.
+
+Closing the twin case needs a **run-scoped** fact — a nonce the engine writes and reads back, or the
+realpath+size of the running `standup.workflow.js`. Deliberately not built here, and recorded as a
+known gap rather than left implied.
+
 ### Judges
 
-`standup/control/tests/test_arm_path.sh` (new) and a `C4` group in `test_sdlc_routing.js`
-(103 cases). The arm judge builds its decoy as a real lowercase `standup/` directory rather than
+`standup/control/tests/test_arm_path.sh` (new) and `C4`/`C5` groups in `test_sdlc_routing.js`
+(111 cases). The arm judge builds its decoy as a real lowercase `standup/` directory rather than
 relying on macOS case-folding: CI is `ubuntu-latest` and case-sensitive, so a `STANDUP/` decoy would
 never resolve there, "the decoy is untouched" would be vacuously true, and the `E-03` mutation would
 stay green on the only machine that runs it automatically.

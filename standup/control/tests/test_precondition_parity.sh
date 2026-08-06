@@ -333,7 +333,11 @@ self_test() {
 2. Then open the portal and submit a code task (target `project:demo-app`).
 EOF
   fails=0; sites=0
-  local report; report="$(audit_tree "$dir")"
+  # `|| exit $?` for the same reason as test_setup_guard.sh: a command substitution is a subshell,
+  # so a die_judge inside audit_tree would kill it and the caller would sail on. It is currently
+  # closed only by coincidence — every die path also breaks the planted-site assertion below — and
+  # a check that holds by luck is one edit from holding by nothing.
+  local report; report="$(audit_tree "$dir")" || exit $?
   printf '%s\n' "$report"
 
   # The assertion is about THE NEW FILE specifically, and about BOTH classes by name — not about
