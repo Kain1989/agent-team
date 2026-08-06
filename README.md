@@ -287,12 +287,11 @@ bash standup/control/tests/test_precondition_parity.sh                   # every
 bash standup/control/tests/test_eval_resolver.sh                         # /eval says which cases it skipped, and why
 ```
 
-**Four of those take `--self-test`** — `verify_design_quality.js`, `test_setup_guard.sh`,
-`test_precondition_parity.sh`, `test_eval_resolver.sh` — which deliberately breaks the thing being
-judged and requires the judge to go red. Run it before trusting a green. The other four do not: the
-two pytest suites, `check_workflow_parse.js` and `test_sdlc_routing.js` (that last one has its own
-`--self-test`; the parse checker takes a **filename** and would read `--self-test` as one, reporting
-a missing file as if the engine were broken).
+**Five of those take `--self-test`** — `verify_design_quality.js`, `test_sdlc_routing.js`,
+`test_setup_guard.sh`, `test_precondition_parity.sh`, `test_eval_resolver.sh` — which deliberately
+breaks the thing being judged and requires the judge to go red. Run it before trusting a green. The
+other three do not: the two pytest suites, and `check_workflow_parse.js`, which takes a **filename**
+and would read `--self-test` as one, reporting a missing file as if the engine were broken.
 
 Pass and failure counts are deliberately not printed here. A number copied into prose rots
 exactly the way a version number does; run the commands and read what they print.
@@ -304,7 +303,8 @@ for `/standup`, with a Task-tool fallback. Windows is not currently supported. T
 model and the platform notes are in [`SECURITY.md`](SECURITY.md).
 
 - License [MIT](LICENSE) · changes [`CHANGELOG.md`](CHANGELOG.md)
-- CI runs the portal and demo-app suites on pushes to `main` and on every pull request
+- CI runs the portal and demo-app suites, the workflow parse check, and every judge above —
+  each with its `--self-test` first — on pushes to `main` and on every pull request
   (`.github/workflows/ci.yml`).
 
 ---

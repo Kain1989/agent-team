@@ -6,7 +6,7 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 ## [0.3.9] — 2026-08-06
 
 **Deleting the sample — which the docs invite — broke the installer, five documents, and the eval
-suite. Two external teams stopped here.**
+suite. Found from questions two external teams raised after trying the plugin.**
 
 ### The problem this solves
 
@@ -18,10 +18,11 @@ afterwards is the obvious next move. It was never a supported path:
   with nothing installed. Guarding only the `init` block was not enough — the bare-origin, `remote
   add` and `push -u` lines that follow it were outside the block and produced the same fatal twice
   more.
-- **One precondition, five documents, one of them right.** "If `demo-app/.git` is missing, init it"
-  appears in `skills/standup`, `skills/work`, `skills/team`, `.claude/commands/standup.md` and
-  `CLAUDE.md`. Exactly one — `skills/standup` — also said *"(and a `demo-app/` exists)"*. The four
-  that did not include `/work`, the most-used entry point of the three that dispatch work.
+- **One precondition, five documents, three of them wrong.** "If `demo-app/.git` is missing, init
+  it" appears in `skills/standup`, `skills/work`, `skills/team`, `.claude/commands/standup.md` and
+  `CLAUDE.md`. Two were already correct — `skills/standup` guarded it inline, `skills/team`
+  delegated to that copy — and neither is in this diff. The three that stated it unguarded include
+  `/work`, the most-used entry point of the three that dispatch work.
 - **`/eval` went silent about *which cases it could not run*.** The gold-set hardcoded
   `"target": "demo-app"` and both cases imported `textkit`. With the sample gone there was no
   target, no case could run, and nothing said so. A regression suite that reports nothing is
@@ -33,8 +34,8 @@ afterwards is the obvious next move. It was never a supported path:
 - **`setup.sh`** guards the whole sample section, and says why it skipped. The guard opens *after*
   `DEMO`/`ORIGIN` are assigned: under `set -u`, a `$DEMO` referenced outside its own guarded block
   is an unbound-variable abort — the same closed door one line further down.
-- **All five documents** now either carry the existence guard verbatim or delegate to the one copy
-  that does. Editing `/standup` or `/portal` means editing both their skill and their
+- **The three unguarded documents** now carry the existence guard verbatim, joining the two that
+  already did. Editing `/standup` or `/portal` means editing both their skill and their
   `.claude/commands/` file; that pair had already drifted, which is how this was found.
 - **`evals/resolve_cases.py`** decides RUN vs SKIP in code rather than in a prompt. Cases declare
   `requires`; a missing directory is a stated skip with a reason, never a pass, and "0 runnable" is
@@ -56,13 +57,21 @@ afterwards is the obvious next move. It was never a supported path:
 ### Known limitation — `/eval` still cannot run a case in an isolated copy
 
 Fixed here: `/eval` now says which cases it skipped and why. **Not fixed here:** the copy-based
-isolation its own recipe describes does not survive contact with the engine. Review commands are
-built as `git -C ${folder} diff -- .` from the roster's `folder` (`standup/standup.workflow.js`
-`:573` → `:1299`/`:1307`/`:1368`), and `git -C` resolves against the process cwd — so the reviewer
-reads the *real* target while the work happened in the copy, yielding an empty diff reported as
-`review-failed`. Re-pointing `folder` at the copy is refused by the ownership stop at `:567-572`.
-`skills/eval/SKILL.md` now carries this warning inline with the two workarounds. Do not read a
-`review-failed` from an eval as a quality regression without checking which directory was read.
+isolation its own recipe describes does not survive contact with the engine. In
+`standup/standup.workflow.js`, the reviewer prompts are built from the roster's folder —
+`const folder = t.folder || dev.folder || team.folder || '.'` — and interpolated into
+`git -C ${folder} diff -- .` (and `git -C ${folder} show HEAD -- .` for the supervisor's final
+read). `git -C` resolves against the process cwd, so the reviewer reads the *real* target while the
+work happened in the copy: an empty diff, reported as `review-failed`. Re-pointing `folder` at the
+copy is refused by the ownership check that stops on a folder the assignee does not declare
+(`if (t.folder && !owned.includes(t.folder)) stopTick(...)`). `skills/eval/SKILL.md` carries this
+warning inline with the two workarounds. Do not read a `review-failed` from an eval as a quality
+regression without checking which directory was read.
+
+(Those are quoted as code rather than line numbers on purpose. This repo already refuses to print
+test counts in prose because "a number copied into prose rots exactly the way a version number
+does" — a line number rots faster, and one of the five cited here had already drifted from `diff`
+to `show HEAD` by the time it was reviewed.)
 
 ### On the judges themselves
 

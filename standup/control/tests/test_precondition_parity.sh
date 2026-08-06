@@ -58,7 +58,10 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="$(cd "$HERE/../../.." && pwd)"
+# Seam so the judge can be aimed at a fixture tree. Without it the judge always scanned the
+# real repo no matter the cwd, which meant any attempt to test IT had to mutate the real
+# tree — the one thing every judge here is forbidden to do.
+REPO="${STANDUP_PARITY_ROOT:-$(cd "$HERE/../../.." && pwd)}"
 
 MENTION='demo-app/\.git'
 CONDITIONAL='is missing|does not exist|do not exist|does not yet exist'
@@ -66,21 +69,26 @@ GUARD='(and a `demo-app/` exists)'
 DELEGATE='see `/agent-team:standup` step 1'
 TARGET_MENTION='project:demo-app'
 TARGET_GUARD='if a `demo-app/` exists'          # or a pointer to the roster, see TARGET_ALT
-TARGET_ALT='standup/team.json'
+# Must express an ALTERNATIVE, not merely name the roster file. `standup/team.json` alone let a
+# wholly unconditional instruction pass because an unrelated sentence nearby happened to
+# mention the roster — an escape hatch that grants itself.
+TARGET_ALT="otherwise any developer's \`folder\` from \`standup/team.json\`"
 WINDOW=4          # lines either side of the instruction line the guard may appear on
 
 # The instruction surface. Everything else in the tree is a record, not an order. Paths are relative
 # to the repo root; a directory entry covers everything beneath it.
-INSTRUCTION_PATHS=('skills' '.claude/commands' 'CLAUDE.md' 'README.md')
+# `hooks/` is here because supervisor_charter.py / route_reminder.py / supervisor_gate.py
+# INJECT their text into the model's context at SessionStart and on every prompt. By this
+# judge's own definition — a document that tells someone (human or model) to do something —
+# the charter is the purest instruction surface in the repo, and it was the one surface no
+# rule and no advisory could see.
+INSTRUCTION_PATHS=('skills' '.claude/commands' 'hooks' 'CLAUDE.md' 'README.md')
 
 fails=0
 sites=0
-check() { # name ok detail
-  local name="$1" ok="$2" detail="${3:-}"
-  [[ "$ok" == "1" ]] || fails=$((fails + 1))
-  printf '  %s → %s%s\n' "$name" "$([[ "$ok" == 1 ]] && echo PASS || echo FAIL)" \
-    "${detail:+  $detail}"
-}
+# (No local check() here: verdicts are printed by the python discovery pass, which owns the tally.
+# A second, unreachable copy of check() lived here for a while — dead code in a judge is one more
+# thing a reader can mistake for coverage.)
 die_judge() { printf '\n!! JUDGE BROKEN — %s\n' "$1" >&2; exit 3; }
 
 # ---------- audit one tree ----------
@@ -125,7 +133,7 @@ def collect(base, exts):
     return found
 
 
-docs = sorted({p for base in instruction_paths for p in collect(base, (".md",))})
+docs = sorted({p for base in instruction_paths for p in collect(base, (".md", ".py"))})
 
 sites = fails = 0
 mentioning = 0
@@ -177,7 +185,8 @@ for path in docs:
             fails += 1
             how = "states the init precondition with NO directory-existence guard"
         rel = os.path.relpath(path, root)
-        classified.add((path, n))
+        if ok:
+            classified.add((path, n))
         print("  [init]   %s:%d → %s  %s" % (rel, n, "PASS" if ok else "FAIL", how))
 
     # ---- class 2: TARGET — "submit a code task against project:demo-app" ----
@@ -195,7 +204,8 @@ for path in docs:
                        "deleted that target does not exist"), False
             fails += 1
         rel = os.path.relpath(path, root)
-        classified.add((path, n))
+        if ok:
+            classified.add((path, n))
         print("  [target] %s:%d → %s  %s" % (rel, n, "PASS" if ok else "FAIL", how))
 
 # ---- ADVISORY (judges nothing; makes under-discovery visible) ----
@@ -205,20 +215,44 @@ for path in docs:
 # self-discovering judge is the failure its own header warns about.
 ADVISORY_HINT = re.compile(r"git\s+-C\s+[\"']?\$?\{?[A-Za-z_]*demo-app|demo-app.{0,40}\bgit init\b"
                            r"|\bgit init\b.{0,40}demo-app", re.I)
-# A classified instruction spans a paragraph plus its fenced command block, so hits a few lines
-# below it are the SAME instruction, already judged. Suppress that neighbourhood or the advisory
-# reports the very lines the rules just passed — noise that trains the reader to ignore it.
-ADVISORY_NEAR = 12
+# What must be suppressed is the COMMAND BODY of an already-judged instruction — the
+# `git -C demo-app init ...` lines under a guarded paragraph. What must NOT be suppressed is a
+# second, unguarded instruction that happens to sit nearby.
+#
+# A proximity radius cannot tell those apart, and tuning it just picks which one to get wrong: at
+# 12 a paraphrase planted 3 lines under a passing site vanished; at 2 the four legitimate command
+# bodies came back as noise. So the rule is STRUCTURAL instead — suppress only a line that is
+# itself a bare shell command near a PASSING site. Prose is never suppressed, which is what a
+# paraphrase always is.
+#
+# Suppression is limited to PASSING sites on purpose: near a FAILING one the surrounding evidence
+# is exactly what a reader needs.
+#
+# RESIDUAL GAP, stated rather than papered over: a paraphrase written AS a bare `git -C demo-app`
+# command directly under a passing site is still suppressed. The classifier does not read
+# paraphrases at all (see the header) — this narrows the blind spot, it does not remove it.
+ADVISORY_NEAR = 6
+# NOTE \x60 (backtick) is written as an escape, never literally: this whole python block sits
+# inside a `$( ... )` command substitution, and bash scans that for backticks as legacy
+# command-substitution delimiters even though the heredoc is quoted. One literal backtick
+# here = "unexpected EOF while looking for matching" and the judge will not parse. Same
+# disease the workflow engine has with raw backticks in template literals.
+ADVISORY_CMD = re.compile(r"^[\x60]{0,3}\s*(git|bash|sh)\s")
 advisory = []
 for base in instruction_paths + ["standup/standup.workflow.js", "setup.sh", "standup/team.json"]:
-    for path in collect(base, (".md", ".js", ".json", ".sh")):
+    for path in collect(base, (".md", ".py", ".js", ".json", ".sh")):
         try:
             lines2 = open(path, encoding="utf-8").read().splitlines()
         except (OSError, UnicodeDecodeError):
             continue
         for i, ln in enumerate(lines2, 1):
-            if ADVISORY_HINT.search(ln) and not any(
-                    p == path and abs(q - i) <= ADVISORY_NEAR for (p, q) in classified):
+            if not ADVISORY_HINT.search(ln):
+                continue
+            near_pass = any(p == path and abs(q - i) <= ADVISORY_NEAR for (p, q) in classified)
+            is_cmd_body = bool(ADVISORY_CMD.match(ln.strip()))
+            if near_pass and (is_cmd_body or i in {q for (p, q) in classified if p == path}):
+                continue
+            if True:
                 advisory.append("%s:%d  %s" % (os.path.relpath(path, root), i, ln.strip()[:100]))
 
 print("#ADVISORY %d" % len(advisory))

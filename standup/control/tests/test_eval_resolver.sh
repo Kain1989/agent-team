@@ -135,13 +135,27 @@ run_cases() { # <resolver-path> <label-prefix>
   LAST_OUT="$(python3 "$R" --json 2>&1)"; LAST_RC=$?
   check "${pfx}evals/cases.json resolves cleanly" \
     "$([[ $LAST_RC -eq 0 ]] && echo 1 || echo 0)" "exit=$LAST_RC"
-  check "${pfx}every shipped case declares \`requires\`" \
-    "$(python3 -c '
-import json,sys
-d=json.load(open(sys.argv[1]))
-sys.exit(0 if all(c.get("requires") for c in d["cases"]) else 1)' "$REPO/evals/cases.json" \
-      && echo 1 || echo 0)" \
-    "a case without it silently inherits the default target"
+  # `all(...)` over an EMPTY list is True. With `"cases": []` this check passed while asserting
+  # nothing at all — and an empty gold-set is not hypothetical: it is what ships the moment the
+  # bundled sample goes away. A vacuous pass is the same defect as a gate that never fires, so the
+  # emptiness is reported as its own distinct outcome rather than being silently absorbed.
+  local shipped_rc; python3 - "$REPO/evals/cases.json" <<'PYEOF'
+import json, sys
+d = json.load(open(sys.argv[1]))
+cases = d.get("cases") or []
+if not cases:
+    sys.exit(2)                                    # empty: not a pass, not a failure — say so
+sys.exit(0 if all(c.get("requires") for c in cases) else 1)
+PYEOF
+  shipped_rc=$?
+  if [[ $shipped_rc -eq 2 ]]; then
+    printf '  %s → n/a   the shipped gold-set has no cases; nothing to assert (this is NOT a pass)\n' \
+      "${pfx}every shipped case declares \`requires\`"
+  else
+    check "${pfx}every shipped case declares \`requires\`" \
+      "$([[ $shipped_rc -eq 0 ]] && echo 1 || echo 0)" \
+      "a case without it silently inherits the default target"
+  fi
 }
 
 self_test() {

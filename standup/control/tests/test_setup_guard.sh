@@ -25,7 +25,9 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
-SETUP="$REPO/setup.sh"
+# Seam so the judge can be pointed at a fixture setup.sh — used only by --self-test, to exercise
+# the exit-3 path against a deliberately broken installer without touching the real one.
+SETUP="${STANDUP_SETUP_SH:-$REPO/setup.sh}"
 
 # The slice runs from the start of the sample section to the END OF THE FILE, deliberately — not to
 # the section-6 marker. A window that stops at the next section excludes anything added afterwards,
@@ -153,7 +155,13 @@ run_cases() { # <section5-text> <label-prefix>
 # One NAMED mutation: neutralize the existence guard, in memory. Case B must go red. A mutation
 # whose anchor no longer matches is a HARD ERROR, never a skip.
 self_test() {
-  local body; body="$(extract_section5 "$SETUP")"
+  # `|| exit $?` is load-bearing, not defensive. A command substitution runs in a SUBSHELL, so
+  # `exit 3` inside extract_section5 kills that subshell and nothing else — every die_judge in
+  # it was decoration. Measured: move the closing-hints guard above the marker (leaving the
+  # self-test anchor intact) and the judge printed "!! JUDGE BROKEN" to stderr while BOTH the
+  # main run and --self-test exited 0. CI reads exit codes, so that is a fully green build over
+  # a judge announcing its own blindness.
+  local body; body="$(extract_section5 "$SETUP")" || exit $?
   local anchor='if [[ -d "$DEMO" ]]; then'
   if ! grep -qF "$anchor" <<<"$body"; then
     die_judge "self-test mutation anchor not found in section 5: $anchor
@@ -179,7 +187,42 @@ self_test() {
     printf '   that stayed green:%s\n' "$missed" >&2
     return 3
   fi
-  printf '\n--self-test → PASS  (case B went red by name; %d check(s) total)\n' "$fails"
+  # ---- exit-3 contract ----
+  # An exit code that is never asserted is not a contract. Both die_judge call sites in
+  # extract_section5 sat inside a command substitution, so their `exit 3` killed a subshell and
+  # the script sailed on to print "all checks PASS" and exit 0 — announcing its own blindness on
+  # stderr while CI read the code and went green. Two fixtures, one per die_judge branch, run the
+  # judge as a REAL subprocess through the STANDUP_SETUP_SH seam, so the assertion is on the
+  # process exit status a CI step actually reads.
+  printf '\n=== --self-test: the exit-3 contract is asserted, not assumed ===\n'
+  local e3dir; e3dir="$(mktemp -d)"
+  local e3fails=0
+
+  printf 'set -e\n# an installer with no section-5 marker at all\necho hi\n' > "$e3dir/no_marker.sh"
+  STANDUP_SETUP_SH="$e3dir/no_marker.sh" bash "$0" >/dev/null 2>&1
+  local rc_marker=$?
+  check "missing begin marker exits 3 (not 0)" \
+    "$([[ $rc_marker -eq 3 ]] && echo 1 || echo 0)" "exit=$rc_marker"
+  [[ $rc_marker -eq 3 ]] || e3fails=1
+
+  # Marker present, but only ONE guard block below it -> the coverage check must fire and PROPAGATE.
+  { echo 'set -e'; echo "$BEGIN_MARK"; echo 'DEMO="$ROOT/demo-app"';
+    echo 'if [[ -d "$DEMO" ]]; then echo one; fi'; } > "$e3dir/one_guard.sh"
+  STANDUP_SETUP_SH="$e3dir/one_guard.sh" bash "$0" >/dev/null 2>&1
+  local rc_cov=$?
+  check "a slice that stopped covering the code exits 3 (not 0)" \
+    "$([[ $rc_cov -eq 3 ]] && echo 1 || echo 0)" "exit=$rc_cov"
+  [[ $rc_cov -eq 3 ]] || e3fails=1
+
+  rm -rf "$e3dir"
+  if [[ $e3fails -ne 0 ]]; then
+    printf '\n!! SELF-TEST FAILED — the judge reported itself broken and still exited 0.\n' >&2
+    printf '   `exit 3` inside a command substitution kills only the subshell; the call sites\n' >&2
+    printf '   need `|| exit $?`. CI reads the exit code and nothing else.\n' >&2
+    return 3
+  fi
+
+  printf '\n--self-test → PASS  (case B went red by name; exit-3 contract holds; %d check(s) total)\n' "$fails"
   return 0
 }
 
@@ -191,7 +234,13 @@ main() {
     *) printf 'usage: test_setup_guard.sh [--self-test]\n' >&2; exit 64 ;;
   esac
 
-  local body; body="$(extract_section5 "$SETUP")"
+  # `|| exit $?` is load-bearing, not defensive. A command substitution runs in a SUBSHELL, so
+  # `exit 3` inside extract_section5 kills that subshell and nothing else — every die_judge in
+  # it was decoration. Measured: move the closing-hints guard above the marker (leaving the
+  # self-test anchor intact) and the judge printed "!! JUDGE BROKEN" to stderr while BOTH the
+  # main run and --self-test exited 0. CI reads exit codes, so that is a fully green build over
+  # a judge announcing its own blindness.
+  local body; body="$(extract_section5 "$SETUP")" || exit $?
   printf 'setup.sh demo-app-guard judge — section 5 extracted from %s\n' "${SETUP#"$REPO"/}"
   run_cases "$body"
 

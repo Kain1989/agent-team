@@ -38,7 +38,10 @@ jobs:
         # mis-routed task must still stop rather than run the pipeline against the wrong repo.
         # README has listed this under Tests since it was written; CI never ran it, so the one
         # judge covering "the machine is aimed at the wrong thing" was itself unenforced.
-        run: node standup/control/tests/test_sdlc_routing.js
+        # --self-test first, like the other four: it was the one judge whose teeth CI never checked.
+        run: |
+          node standup/control/tests/test_sdlc_routing.js --self-test
+          node standup/control/tests/test_sdlc_routing.js
 
       - name: Onboarding judges
         # The paths a NEW user walks: the installer with the sample deleted, the five documents
