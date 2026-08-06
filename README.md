@@ -292,7 +292,7 @@ Supported: macOS and Linux — bash, Python 3.9+, git, the `claude` CLI, and the
 for `/standup`, with a Task-tool fallback. Windows is not currently supported. The security
 model and the platform notes are in [`SECURITY.md`](SECURITY.md).
 
-- License [MIT](LICENSE) · changes [`CHANGELOG.md`](CHANGELOG.md) · roadmap [`ROADMAP.md`](ROADMAP.md)
+- License [MIT](LICENSE) · changes [`CHANGELOG.md`](CHANGELOG.md)
 - CI runs the portal and demo-app suites on pushes to `main` and on every pull request
   (`.github/workflows/ci.yml`).
 

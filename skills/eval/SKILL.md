@@ -13,4 +13,4 @@ Run the regression eval suite. Read `evals/cases.json` (a `target` repo + a list
 
 After all cases, print a **SCORECARD**: per-case `✓/✗ id (duration)` then totals (`N/M passed`, total duration). Explicitly flag any **regression** (a case that fails) — that's the signal this suite exists for. If `$ARGUMENTS` names a case id, run only that one.
 
-Note (v0.2 first cut): scoring is pass/fail + duration. Per-case dollar-cost scoring and a fully non-interactive runner are the next iteration (see ROADMAP.md). Pair this with `/agent-team:costs` (spend) and `/agent-team:runs` (history) for the full observe-and-evaluate picture.
+Note: scoring is pass/fail + duration — there is no per-case dollar-cost score, and the runner is interactive rather than fully non-interactive. Pair this with `/agent-team:costs` (spend) and `/agent-team:runs` (history) for the full observe-and-evaluate picture.
