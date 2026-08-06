@@ -3,6 +3,101 @@
 All notable changes to the **agent-team** plugin. Format: [Keep a Changelog](https://keepachangelog.com/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.9] — 2026-08-06
+
+**Deleting the sample — which the docs invite — broke the installer, five documents, and the eval
+suite. Found from questions two external teams raised after trying the plugin.**
+
+### The problem this solves
+
+`demo-app/` is a sample. The README says to point the team at your own repo; deleting the sample
+afterwards is the obvious next move. It was never a supported path:
+
+- **`setup.sh` died, exit 128.** `set -euo pipefail` plus `git -C "$ROOT/demo-app" init` on a
+  directory that is not there is `fatal: cannot change to .../demo-app`, and the installer aborted
+  with nothing installed. Guarding only the `init` block was not enough — the bare-origin, `remote
+  add` and `push -u` lines that follow it were outside the block and produced the same fatal twice
+  more.
+- **One precondition, five documents, three of them wrong.** "If `demo-app/.git` is missing, init
+  it" appears in `skills/standup`, `skills/work`, `skills/team`, `.claude/commands/standup.md` and
+  `CLAUDE.md`. Two were already correct — `skills/standup` guarded it inline, `skills/team`
+  delegated to that copy — and neither is in this diff. The three that stated it unguarded include
+  `/work`, the most-used entry point of the three that dispatch work.
+- **`/eval` went silent about *which cases it could not run*.** The gold-set hardcoded
+  `"target": "demo-app"` and both cases imported `textkit`. With the sample gone there was no
+  target, no case could run, and nothing said so. A regression suite that reports nothing is
+  indistinguishable from one nobody ran. **This release fixes the reporting, not the running** —
+  see the known limitation below.
+
+### What changed
+
+- **`setup.sh`** guards the whole sample section, and says why it skipped. The guard opens *after*
+  `DEMO`/`ORIGIN` are assigned: under `set -u`, a `$DEMO` referenced outside its own guarded block
+  is an unbound-variable abort — the same closed door one line further down.
+- **The three unguarded documents** now carry the existence guard verbatim, joining the two that
+  already did. Editing `/standup` or `/portal` means editing both their skill and their
+  `.claude/commands/` file; that pair had already drifted, which is how this was found.
+- **`evals/resolve_cases.py`** decides RUN vs SKIP in code rather than in a prompt. Cases declare
+  `requires`; a missing directory is a stated skip with a reason, never a pass, and "0 runnable" is
+  printed as a complete answer with instructions for making it runnable.
+
+### Judges (each proved it could fail before it was trusted)
+
+- `standup/control/tests/test_setup_guard.sh` — slices section 5 out of the real `setup.sh` by its
+  own marker comments, so it tests shipped text rather than a copy that drifts; a missing marker is
+  exit 3, never a skip.
+- `standup/control/tests/test_precondition_parity.sh` — **discovers** the sites by walking the tree
+  instead of holding a list, because the sixth document, written next month by someone who never
+  read the judge, is exactly the one a list cannot see (`E-05`, aimed at documentation).
+- `standup/control/tests/test_eval_resolver.sh` — fixtures only; the repo tree is read, never written.
+- CI now runs all three (each `--self-test` first) **and `test_sdlc_routing.js`**, which README had
+  listed under Tests since it was written while CI never ran it — the one judge covering "the machine
+  is aimed at the wrong thing" was itself unenforced.
+
+### Known limitation — `/eval` still cannot run a case in an isolated copy
+
+Fixed here: `/eval` now says which cases it skipped and why. **Not fixed here:** the copy-based
+isolation its own recipe describes does not survive contact with the engine. In
+`standup/standup.workflow.js`, the reviewer prompts are built from the roster's folder —
+`const folder = t.folder || dev.folder || team.folder || '.'` — and interpolated into
+`git -C ${folder} diff -- .` (and `git -C ${folder} show HEAD -- .` for the supervisor's final
+read). `git -C` resolves against the process cwd, so the reviewer reads the *real* target while the
+work happened in the copy: an empty diff, reported as `review-failed`. Re-pointing `folder` at the
+copy is refused by the ownership check that stops on a folder the assignee does not declare
+(`if (t.folder && !owned.includes(t.folder)) stopTick(...)`). `skills/eval/SKILL.md` carries this
+warning inline with the two workarounds. Do not read a `review-failed` from an eval as a quality
+regression without checking which directory was read.
+
+(Those are quoted as code rather than line numbers on purpose. This repo already refuses to print
+test counts in prose because "a number copied into prose rots exactly the way a version number
+does" — a line number rots faster, and one of the five cited here had already drifted from `diff`
+to `show HEAD` by the time it was reviewed.)
+
+### On the judges themselves
+
+Writing and then reviewing these judges caught **six** defects in the judges, every one of which
+read as green — the same disease they were written to catch, one level up:
+
+- the parity judge matched line by line and silently found 4 of 5 sites (`skills/work` wraps "is" /
+  "missing:" across a newline), then failed a correctly-guarded paragraph because the guard phrase
+  straddled a line while discovery did not;
+- it walked all 43 markdown files, so a **changelog entry recounting this very bug** would have
+  failed it — it passed only because narrative prose happened to repeat the guard phrase two lines
+  later. It now reads the instruction surface (`skills/`, `.claude/commands/`, `CLAUDE.md`,
+  `README.md`) and leaves records alone;
+- it knew exactly one sentence shape, so `/portal` telling users to target `project:demo-app`
+  unconditionally was invisible to it — the pair this release's own note promised to keep in sync;
+- the setup judge's window stopped at the section-6 marker, excluding a guard **this release
+  added** twelve lines later, and passed all-green over code it could not see;
+- the eval judge had no fixture where `requires` differed from `target`, so that entire branch
+  could be deleted with every check still green;
+- and its self-test reported PASS off an unrelated failure while the mutation quietly no-opped.
+
+Every self-test now asserts the **named** checks that must go red, the parity judge prints an
+advisory list of instruction-shaped lines no rule classified, and each judge states what it does
+not cover. A judge that reports a confident count over a surface it only partly reads is worse
+than a hardcoded list, because the list at least shows its coverage.
+
 ## [0.3.8] — 2026-08-05
 
 **The exemption that let dev agents write at all was documented in three places and armed by none.**
