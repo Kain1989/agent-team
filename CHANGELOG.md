@@ -3,6 +3,60 @@
 All notable changes to the **agent-team** plugin. Format: [Keep a Changelog](https://keepachangelog.com/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.8] — 2026-08-05
+
+**The exemption that let dev agents write at all was documented in three places and armed by none.**
+
+### The problem this solves
+
+The Task/agent tool has **no `cwd` parameter**
+([anthropics/claude-code#12748](https://github.com/anthropics/claude-code/issues/12748)), so every
+subagent inherits the parent session's working directory. `hooks/supervisor_gate.py` identifies the
+supervisor (EM) by exactly that cwd. Put together: every dev agent the engine dispatches is
+classified as the EM, and its `Edit`/`Write` on the project folder it was sent to is **hard-blocked**.
+
+The roster gives each developer a `folder`, and that data is correct — but a folder string cannot
+become a process cwd. It can only be interpolated into a prompt, and a prompt cannot govern a hook.
+
+`standup/control/team_run_active` has always been the exemption for this, and the gate has always
+read it. **Nothing ever wrote it.** The gate's docstring said "the EM creates it before a team run";
+`CLAUDE.md` repeated it; no code did it, and the plugin shipped no tool to do it by hand either. A
+mechanism claimed in three places and wired in none is the same false-promise defect this project
+keeps finding elsewhere — this time in the path that decides whether *any* code can be produced.
+
+The failure mode is the expensive kind: silent. The dev agent plans, investigates, writes its patch,
+passes its own test gate — and the fresh-context reviewer then correctly fails it for an **empty
+diff**. The run reports `review-failed`, which reads as a code-quality problem and sends you looking
+in the wrong place. On the system this plugin is distilled from, one such run cost 3h22m / 5.6M
+tokens / 59 agents for zero commits.
+
+### What changed
+
+- **The engine arms the exemption itself.** `standup/standup.workflow.js` runs a `phase('Arm')`
+  before Work on any run that writes code, and tears it down at the end. Read-only ticks skip it:
+  they touch no project folder, and needlessly switching the gate off for 6h is its own cost.
+- **A failed arm STOPS the run.** Continuing would burn the whole gated pipeline on a structurally
+  guaranteed empty diff and then mislabel it `review-failed`. The error says what to do instead.
+- **`standup/control/team_run_flag.sh`** — new. `status` / `set <run-id>` / `clear <run-id>` for
+  hand-driven sessions. It **appends** rather than overwrites (runs can share the flag) and
+  **refuses to clear** while another run's record is present — clearing it mid-run switches the gate
+  back on and blocks every write that run has left to make. `clear` is never the safety mechanism
+  anyway: a crashed run never reaches its teardown, which is why the gate's **6h TTL** exists.
+- Why an agent runs a shell one-liner: workflow scripts have no filesystem access, and the agents
+  they spawn have Bash. One cheap agent against a whole run that would otherwise produce nothing.
+
+### Judge
+
+`node standup/control/tests/test_sdlc_routing.js` — 5 new cases (96 total): the arm happens, it
+happens **before** the first dev agent (arming afterwards is not arming), the teardown runs, and a
+failed or null arm stops the run. Two new `--self-test` fixtures (14 total) prove those cases can go
+RED: removing the arm step, and making an arm failure non-fatal.
+
+### Also
+
+- `.claude-plugin/marketplace.json` said `0.3.5` while `plugin.json` said `0.3.7`, so installed users
+  were never offered 0.3.7's gate fixes. Both now read `0.3.8`.
+
 ## [0.3.7] — 2026-08-03
 
 **Three gates that could not open, and one parse failure that silently changed which pipeline ran.**

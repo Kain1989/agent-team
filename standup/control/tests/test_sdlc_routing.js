@@ -75,8 +75,14 @@ function host(reply) {
       rec.labels.push(label);
       rec.prompts.push({ label, prompt: String(prompt) });
       const r = reply(label, String(prompt), rec);
-      if (r === undefined) throw new Error('SENTINEL-AGENT: ' + label);
-      return r;
+      if (r !== undefined) return r;
+      // ARM/DISARM open and close every code-writing run (they arm the supervisor-gate exemption
+      // so dispatched dev agents can write at all — see section I). For every OTHER case they are
+      // noise, so they default to "armed successfully". A case that wants to exercise a FAILED
+      // arm just answers the label itself, and this default steps aside.
+      if (/^arm:/.test(label)) return { flag_present: true, set_by_me: true, detail: 'STUBBED' };
+      if (/^disarm:/.test(label)) return 'STUBBED';
+      throw new Error('SENTINEL-AGENT: ' + label);
     },
     parallel: async (fns) => {
       const out = [];
@@ -520,6 +526,57 @@ async function runCases(src) {
   }
 
   // ═══ I. Necessary but insufficient: the file the host must be able to LOAD ═══
+  // ═══ H2. The supervisor-gate exemption is armed BY THE ENGINE ═══
+  // The subagent-cwd problem (anthropics/claude-code#12748): the Task/agent tool has no `cwd`
+  // parameter, so every dispatched dev agent inherits the EM's cwd — and supervisor_gate.py
+  // identifies the EM by cwd. Result: the dev agents are classified as the EM and their writes are
+  // hard-blocked. The run then completes with an EMPTY diff and reports review-failed, which reads
+  // as a code-quality problem and sends you looking in the wrong place.
+  //
+  // The exemption flag and the gate's reading of it both already existed; nothing ever SET it. A
+  // gate documented in three places and armed by none is the false-promise defect this repo keeps
+  // finding elsewhere. These cases hold the wiring: it must be armed, armed FIRST, and a failed
+  // arm must STOP the run rather than let it burn a full pipeline on a guaranteed empty diff.
+  section('H2. The team-run exemption is armed by the engine, before any dev agent');
+  {
+    const { rec, hooks } = host((label) => {
+      if (label === 'intake:pm') return okContract;
+      if (label === 'sup:intake') return { approve: true, note: 'ok' };
+      if (label.startsWith('investigate:')) throw new Error(STOP_AT_INVESTIGATE);
+      return undefined;
+    });
+    await makeRunner(src, hooks)({ date: 'D', roster, task: TASK });
+    const iArm = rec.labels.indexOf('arm:team_run_active');
+    const iDev = rec.labels.findIndex(l => /^(investigate|implement|plan):/.test(l));
+    check('a code-writing run arms the exemption itself (not "the launcher remembers")', iArm >= 0,
+      'labels=' + rec.labels.slice(0, 4).join(','));
+    check('it is armed BEFORE the first dev agent (arming after is not arming)',
+      iArm >= 0 && iDev >= 0 && iArm < iDev, `arm@${iArm} dev@${iDev}`);
+    check('the run tears the exemption down at the end', rec.labels.includes('disarm:team_run_active'),
+      'labels=' + rec.labels.join(','));
+  }
+  {
+    // A failed arm must be fatal. Anything softer reproduces the exact failure this guards against,
+    // and disguises it as a review verdict.
+    for (const [name, verdict] of [
+      ['a failed arm STOPS the run (flag_present:false)', { flag_present: false, detail: 'could not create it' }],
+      ['a null arm result STOPS the run', null],
+    ]) {
+      const { rec, hooks } = host((label) => {
+        if (label === 'arm:team_run_active') return verdict;
+        if (label === 'intake:pm') return okContract;
+        if (label === 'sup:intake') return { approve: true, note: 'ok' };
+        return undefined;
+      });
+      let err = null;
+      try { await makeRunner(src, hooks)({ date: 'D', roster, task: TASK }); } catch (e) { err = e; }
+      const reachedDev = rec.labels.some(l => /^(investigate|implement|plan):/.test(l));
+      check(name, !!err && /ARM failed/.test(String(err.message)) && !reachedDev,
+        err ? (reachedDev ? 'threw, but a dev agent already ran' : String(err.message).slice(0, 44))
+            : 'did not throw — the run would burn a full pipeline on a guaranteed empty diff');
+    }
+  }
+
   section('I. The engine still loads in the host');
   {
     let loadErr = null;
@@ -535,6 +592,17 @@ async function runCases(src) {
 // memory. It must drive at least one named case RED. Anchors are stable substrings, never line
 // numbers — most of these target lines this port rewrote.
 const FIXTURES = [
+  { name: 'arm-failure-non-fatal',
+    why: 'the exemption arm still runs but a failure no longer stops the run — which is exactly the original defect: a full gated pipeline burned on a guaranteed empty diff, reported as review-failed',
+    must_red: ['a failed arm STOPS the run (flag_present:false)', 'a null arm result STOPS the run'],
+    from: `  if (!r || r.flag_present !== true) {`,
+    to:   `  if (false) {` },
+  { name: 'arm-step-removed',
+    why: 'the engine no longer arms the supervisor-gate exemption, so it is back to depending on a launcher remembering — and every dispatched dev agent write is hard-blocked',
+    must_red: ['a code-writing run arms the exemption itself (not "the launcher remembers")',
+               'it is armed BEFORE the first dev agent (arming after is not arming)'],
+    from: `  phase('Arm')\n  await armTeamRunExemption()`,
+    to:   `  const _unusedArm = async () => armTeamRunExemption()` },
   { name: 'intake-step-removed',
     why: 'INTAKE deleted from the loop — the phase that asks whether we are building the right thing',
     // must_red names the cases this fixture is REQUIRED to break. Counting reds is not enough: a

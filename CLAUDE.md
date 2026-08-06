@@ -27,9 +27,25 @@ the mode, and a **PreToolUse hook hard-blocks hand-editing any project path**
 [`hooks/hooks.json`](hooks/hooks.json). If you hit that block, route the work through the
 team; it isn't a bug to work around. Two release valves: a trivial/urgent **one-line
 hotfix** can be logged through `standup/control/supervisor_override` (a one-line reason;
-audited to `control/hotfix_audit.log`, auto-expires 1h), and while a **native-team run is
-active** (`standup/control/team_run_active`, < 6h) the gate steps aside so teammates can
-do the project work under the native-team lifecycle hooks.
+audited to `control/hotfix_audit.log`, auto-expires 1h), and while a **team run is
+active** (`standup/control/team_run_active`, < 6h) the gate steps aside so the dispatched
+agents can do the project work under the gated SDLC.
+
+**That second valve is not optional for a run that writes code — it is what makes writing
+code possible at all.** The Task/agent tool has no `cwd` parameter
+([anthropics/claude-code#12748](https://github.com/anthropics/claude-code/issues/12748)), so
+every dev agent inherits the EM session's cwd — and the gate identifies the EM by cwd. Without
+the flag, every dispatched write is blocked, the run finishes with an **empty diff**, and the
+reviewer correctly fails it as `review-failed` — which reads as a code-quality problem and
+sends you looking in the wrong place. The roster's per-developer `folder` cannot help here: a
+folder string can be interpolated into a prompt, but a prompt cannot govern a hook.
+
+`standup/standup.workflow.js` therefore **arms the flag itself** (a `phase('Arm')` before Work,
+torn down at the end; read-only ticks skip it), and a failed arm **stops the run** rather than
+burning a full pipeline on a guaranteed empty diff. For a hand-driven session, manage it with
+`standup/control/team_run_flag.sh` (`status` / `set <run-id>` / `clear <run-id>`) — it appends
+rather than overwrites, and refuses to clear while another run still holds the exemption. The
+6h TTL — not `clear` — is the real backstop, since a crashed run never reaches its teardown.
 
 ## How to run the team
 

@@ -14,6 +14,7 @@ export const meta = {
     { title: 'Design',     detail: 'design_lead runs the deterministic judge (control/verify_design_quality.js) over the live UI, then judges the [JUDGMENT] rules of DESIGN_RULEBOOK.md; every finding cites a rule id. Runs BEFORE Synthesize so its tasks land on THIS tick\'s board instead of in a progress file nobody reads' },
     { title: 'Synthesize', detail: 'EM merges squad boards into one ranked board' },
     { title: 'Staff Pulse',detail: 'light-but-real lens from pm_agent (scope/say-no) + design_lead (delivery of the design queue) + product_qa (actually uses the product)' },
+    { title: 'Arm',        detail: 'code-writing runs only: arms standup/control/team_run_active so dispatched dev agents can write their project folder. Subagents inherit the EM cwd (the Task tool has no cwd parameter — anthropics/claude-code#12748) and the supervisor gate identifies the EM by cwd, so without this the whole run finishes with an empty diff' },
     { title: 'Work',       detail: 'the gated SDLC per task, identical on both entry paths: INTAKE (pm_agent turns the raw ask into an outcome contract; the supervisor gates it — one revision, one recheck, then the run STOPS) -> INVESTIGATE -> PLAN -> PLAN CHALLENGE (fresh ctx) -> IMPLEMENT+tests -> TEST GATE -> REVIEW (pair + correctness + conventions+tests, PLUS a design-quality lens driven by the squad\'s declared review_surface) -> COMMIT ON GREEN (feature branch, no push)' },
   ],
 }
@@ -920,9 +921,113 @@ Keep it tight: a headline, a few concrete observations, and 0-3 light board nudg
 if (!SINGLE) log(`STAFF PULSE ${staffPulse.filter(p => p.engaged).length} of ${staffPulse.length} engaged: ` +
   staffPulse.map(p => `${p._staff}${p.engaged ? '' : '(skip)'}`).join(' '))
 
+// ---- Phase 3.5: ARM THE TEAM-RUN EXEMPTION ---------------------------------------------------
+// The subagent-cwd problem (upstream: anthropics/claude-code#12748). The Task/agent tool has NO
+// `cwd` parameter, so every subagent inherits the EM session's cwd. hooks/supervisor_gate.py
+// decides "is this the supervisor?" from exactly that cwd — so the dev agents this engine
+// dispatches are all classified as the EM, and their Edit/Write on the project they were sent to
+// is HARD-BLOCKED. The roster declares a `folder` per developer, but a folder string cannot become
+// a process cwd; it can only be interpolated into a prompt, and a prompt cannot govern a hook.
+//
+// The exemption flag (standup/control/team_run_active) already existed and the gate already reads
+// it — but nothing ever SET it. A gate documented in three places and armed by none is the same
+// false-promise defect this repo keeps finding elsewhere: a mechanism that is claimed but not
+// wired. Arm it from the engine so it does not depend on a launcher remembering.
+//
+// Why an agent to do a shell one-liner: workflow scripts have NO filesystem access. The agents
+// they spawn have Bash. This is the only way the engine can arm itself, and one cheap agent is
+// nothing against a whole run that would otherwise produce an empty diff.
+//
+// It THROWS on failure. Without the flag the Work phase is structurally incapable of producing
+// code, and it fails by reporting `review-failed` on an empty diff — which reads as a code-quality
+// problem and sends you looking in the wrong place. Fail loudly at the start instead.
+const ARM_SCHEMA = {
+  type: 'object',
+  required: ['flag_present', 'detail'],
+  properties: {
+    flag_present: { type: 'boolean' },
+    set_by_me:    { type: 'boolean' },
+    detail:       { type: 'string' },
+  },
+}
+const ARM_RUN_ID = `engine-${DATE}`
+async function armTeamRunExemption() {
+  const r = await agent(
+    `You are this run's ARM step. Do exactly one thing, then return.
+
+WHY (this decides whether the run can produce any code at all): this workflow dispatches dev
+agents to edit project folders. Subagents inherit the EM session's cwd (the Task tool has no cwd
+parameter), and the supervisor gate decides "is this the EM?" from that cwd — so those dev agents
+get classified as the EM and their writes are hard-blocked. The run then completes with an EMPTY
+diff and reports review-failed. standup/control/team_run_active is the exemption flag that exists
+for precisely this, and it must be armed BEFORE any dev agent runs.
+
+Do this:
+1. Locate the flag helper. Try these in order, use the first that exists:
+     standup/control/team_run_flag.sh
+     ../standup/control/team_run_flag.sh
+   If neither exists, fall back to appending the record yourself — create the directory first:
+     mkdir -p standup/control && printf '%s | %s | %s\\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${ARM_RUN_ID}" "auto-armed by standup engine" >> standup/control/team_run_active
+   (Appending is deliberate: another run may share this flag; never overwrite it.)
+2. If you used the helper, run:  bash <path> set ${ARM_RUN_ID} "auto-armed by standup engine"
+3. VERIFY the file now exists — \`ls -l standup/control/team_run_active\` — and read it back.
+
+Return:
+- flag_present: true ONLY if step 3 confirmed the file exists. If you did not confirm it, return
+  false. Do not fill in true optimistically.
+- set_by_me: true if you added a record this run (appending alongside an existing one counts).
+- detail: one line — which path you used and what the file contains now. If you could not create
+  it, say so here explicitly.
+
+Do nothing else. Do not read the roster, the backlog, or any code.`,
+    { label: 'arm:team_run_active', phase: 'Arm', schema: ARM_SCHEMA, effort: 'low' }
+  )
+  if (!r || r.flag_present !== true) {
+    throw new Error(
+      'ARM failed: standup/control/team_run_active was not armed. Stopping here — continuing would '
+      + 'run the whole gated SDLC while every dev-agent write is blocked by the supervisor gate, '
+      + 'producing an empty diff and a misleading "review-failed". '
+      + 'Agent returned: ' + JSON.stringify(r || null)
+      + ' — Fix: create standup/control/team_run_active (or run standup/control/team_run_flag.sh '
+      + 'set <run-id> "<note>"), confirm it exists, then relaunch.'
+    )
+  }
+  log(`ARM: team_run_active armed (${ARM_RUN_ID}) — dev agents can write their project folder. ${r.detail || ''}`)
+  return r
+}
+// Teardown. Never the real safety mechanism — a crashed run never reaches it — that is the gate's
+// own 6h TTL. This only keeps a normally-finished run from leaving the gate off for hours. It
+// must not break the run, so failure is logged, not thrown.
+async function disarmTeamRunExemption() {
+  try {
+    await agent(
+      `You are this run's DISARM teardown step. Do exactly one thing, then return.
+
+Remove THIS run's record (${ARM_RUN_ID}) from standup/control/team_run_active.
+If standup/control/team_run_flag.sh exists, use:  bash <path> clear ${ARM_RUN_ID}
+Otherwise edit the file by hand: drop only the line containing ${ARM_RUN_ID}; if that leaves the
+file empty, delete the file.
+
+CRITICAL: if any OTHER run's record is still in the file, leave the file in place. Deleting it
+would switch the supervisor gate back on in the middle of that run and block all of its writes.
+The helper refuses to clear in that case and exits non-zero — that is correct behavior, accept it,
+do not pass --force, do not retry.
+
+Return one line describing what happened. Do nothing else.`,
+      { label: 'disarm:team_run_active', phase: 'Work', effort: 'low' }
+    )
+  } catch (e) {
+    log(`DISARM did not complete (not fatal; the gate's 6h TTL is the real backstop): ${(e && e.message) || e}`)
+  }
+}
+
 // ---- Phase 4: WORK — gated SDLC per task (serial; folders are shared) ----
 let worked = []
 if (DO_WORK || SINGLE) {
+  // Only runs that actually write code need the exemption. A read-only tick must not spend an
+  // agent on this, and must not needlessly switch the supervisor gate off for 6h.
+  phase('Arm')
+  await armTeamRunExemption()
   phase('Work')
   const _autoworkable = (board.todays_board || []).filter(t => t.autoworkable)
   const queue = _autoworkable
@@ -1309,6 +1414,8 @@ if (_worked.length && _worked.every(w => w.status === 'escalated-intake')) {
   log(`TICK DONE ${DATE} — ${_worked.length} task(s)${_worked.length ? `: ${tally(_worked)}` : ''} · ` +
     `board ${((board && board.todays_board) || []).length} item(s) · design ${design ? `${DESIGN_TASKS.length} task(s) boarded` : 'no design lead active'}`)
 }
+
+if (DO_WORK || SINGLE) await disarmTeamRunExemption()
 
 return {
   date: DATE,

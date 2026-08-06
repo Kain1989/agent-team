@@ -11,7 +11,7 @@
       "name": "agent-team",
       "source": "./",
       "description": "A gated-SDLC paired-squad team, a Mission Control portal, roster + scheduling commands, and a human approval gate \u2014 run and manage an AI engineering team from Claude Code.",
-      "version": "0.3.5"
+      "version": "0.3.8"
     }
   ]
 }
