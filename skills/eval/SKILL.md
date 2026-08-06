@@ -18,6 +18,19 @@ Run the regression eval suite.
 For EACH case the plan marked `run`, in order:
 
 1. Make an **isolated copy** of the target repo (e.g. `cp -r <target> /tmp/eval-<id>` or a git worktree) so cases never contaminate each other or the real repo.
+
+   > ⚠️ **KNOWN LIMITATION — the isolation and the pipeline disagree, and the pipeline wins.**
+   > The engine builds its review commands as `git -C ${folder} diff -- .` where `folder` comes from
+   > the roster (`standup/standup.workflow.js` `:573`, used at `:1299`, `:1307`, `:1368`). `git -C`
+   > resolves relative to the process cwd, so a run whose `folder` is `demo-app` reviews the **real**
+   > directory while the work happened in your copy — an empty diff, reported as `review-failed`.
+   > Pointing `folder` at the copy does not work either: the engine hard-stops on a folder the
+   > assignee does not own (`:567-572`), and `/tmp/eval-<id>` is not in anyone's `also_owns`.
+   > **Until that is fixed, prefer one of:** run the case on a throwaway *branch inside the real
+   > target* and reset afterwards, or add the copy's path to the assignee's `also_owns` in
+   > `standup/team.json` for the duration of the run. Do **not** report `review-failed` from an eval
+   > as a quality regression without first checking which directory the reviewer actually read.
+
 2. Run the case `prompt` through the **gated SDLC** in that copy — like `/agent-team:work`: the canonical steps in `standup/team.json` → `manager.policy.sdlc_pipeline`, through review. (You may SKIP the commit — eval scores the working result, not a commit.) No lens count is named on purpose: green is derived from the lenses actually planned for the task.
 3. Run the case `check` shell command in that copy. Record **pass/fail** (check exit 0) + **duration** (and per-run cost if the run surfaced it).
 4. Tear down the throwaway copy.

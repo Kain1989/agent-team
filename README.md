@@ -287,8 +287,12 @@ bash standup/control/tests/test_precondition_parity.sh                   # every
 bash standup/control/tests/test_eval_resolver.sh                         # /eval says which cases it skipped, and why
 ```
 
-Each of those takes `--self-test`, which deliberately breaks the thing being judged and requires the
-judge to go red. Run it before trusting a green.
+**Four of those take `--self-test`** — `verify_design_quality.js`, `test_setup_guard.sh`,
+`test_precondition_parity.sh`, `test_eval_resolver.sh` — which deliberately breaks the thing being
+judged and requires the judge to go red. Run it before trusting a green. The other four do not: the
+two pytest suites, `check_workflow_parse.js` and `test_sdlc_routing.js` (that last one has its own
+`--self-test`; the parse checker takes a **filename** and would read `--self-test` as one, reporting
+a missing file as if the engine were broken).
 
 Pass and failure counts are deliberately not printed here. A number copied into prose rots
 exactly the way a version number does; run the commands and read what they print.

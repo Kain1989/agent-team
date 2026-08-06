@@ -17,10 +17,31 @@
 # time, aimed at a surface that keeps growing. So the site list is DERIVED on every run by grepping
 # the tree, and any site it finds must satisfy the rule or the judge is red.
 #
-# WHAT COUNTS AS A SITE. Only an INSTRUCTION: a mention of `demo-app/.git` followed closely by a
-# conditional ("is missing" / "does not exist"). SECURITY.md mentions `demo-app/.git` to say it is
-# gitignored — that is not a precondition and is deliberately not policed. A judge that cries wolf
-# on prose gets switched off, and then it guards nothing.
+# WHERE IT LOOKS — THE INSTRUCTION SURFACE ONLY. Documents that TELL someone (a human or a model)
+# to do something: skills/, .claude/commands/, CLAUDE.md, README.md. Not CHANGELOG.md, not
+# standup/log/, not .standup/ progress files. Those are RECORDS: a changelog entry describing this
+# very bug quotes the old unguarded wording on purpose, and a judge that reads it as an instruction
+# demands the history be rewritten to stay green. The first cut walked all 43 markdown files and
+# passed only because a changelog narrative happened to repeat the guard phrase two lines later —
+# green by coincidence, and it would have blocked CI on the next entry that recounted an old bug.
+#
+# WHAT COUNTS AS A SITE. Two classes, both narrow on purpose:
+#   1. INIT — a mention of `demo-app/.git` followed closely by a conditional ("is missing" / "does
+#      not exist"). SECURITY.md mentions `demo-app/.git` to say it is gitignored; that is not a
+#      precondition and is deliberately not policed.
+#   2. TARGET — telling the reader to submit a code task against `project:demo-app`. Same defect,
+#      different sentence: with the sample deleted, `/portal` still sent people at a directory that
+#      is not there. Class 1 is blind to it by construction (no `demo-app/.git` in the text), which
+#      is exactly why it needed naming rather than assuming one pattern covered the surface.
+#
+# WHAT IT DOES *NOT* COVER — stated because the alternative is letting the next reader assume it is
+# total. It matches two literal patterns and four wordings. A paraphrase ("if demo-app is not yet a
+# git repo"), an inversion ("when there is no demo-app/.git"), or an instruction living in a prompt
+# template rather than a document will NOT be classified. The ADVISORY pass below exists for that:
+# it scans wider, judges nothing, and prints anything that looks like a demo-app init instruction it
+# did not classify. Advisory rather than failing because a classifier loose enough to catch every
+# paraphrase also fires on prose, and a judge that cries wolf gets switched off — but silent
+# under-discovery is the worse failure, so the gap is made visible instead of hidden.
 #
 # The match is made over the file with LINE BREAKS FLATTENED, not line by line. The first cut of
 # this judge matched per line and silently discovered 4 of the 5 real sites: `skills/work/SKILL.md`
@@ -43,7 +64,14 @@ MENTION='demo-app/\.git'
 CONDITIONAL='is missing|does not exist|do not exist|does not yet exist'
 GUARD='(and a `demo-app/` exists)'
 DELEGATE='see `/agent-team:standup` step 1'
+TARGET_MENTION='project:demo-app'
+TARGET_GUARD='if a `demo-app/` exists'          # or a pointer to the roster, see TARGET_ALT
+TARGET_ALT='standup/team.json'
 WINDOW=4          # lines either side of the instruction line the guard may appear on
+
+# The instruction surface. Everything else in the tree is a record, not an order. Paths are relative
+# to the repo root; a directory entry covers everything beneath it.
+INSTRUCTION_PATHS=('skills' '.claude/commands' 'CLAUDE.md' 'README.md')
 
 fails=0
 sites=0
@@ -63,6 +91,8 @@ die_judge() { printf '\n!! JUDGE BROKEN — %s\n' "$1" >&2; exit 3; }
 audit_tree() { # <root>
   local root="$1" out rc
   out="$(MENTION="$MENTION" CONDITIONAL="$CONDITIONAL" GUARD="$GUARD" DELEGATE="$DELEGATE" \
+         TARGET_MENTION="$TARGET_MENTION" TARGET_GUARD="$TARGET_GUARD" TARGET_ALT="$TARGET_ALT" \
+         INSTRUCTION_PATHS="${INSTRUCTION_PATHS[*]}" \
          WINDOW="$WINDOW" ROOT="$root" python3 - <<'PYEOF'
 import os, re, sys
 
@@ -70,6 +100,9 @@ root = os.environ["ROOT"]
 mention = re.compile(os.environ["MENTION"])
 conditional = os.environ["CONDITIONAL"]
 guard, delegate = os.environ["GUARD"], os.environ["DELEGATE"]
+target_mention = os.environ["TARGET_MENTION"]
+target_guard, target_alt = os.environ["TARGET_GUARD"], os.environ["TARGET_ALT"]
+instruction_paths = os.environ["INSTRUCTION_PATHS"].split()
 window = int(os.environ["WINDOW"])
 
 # The conditional must follow the mention CLOSELY — within this many characters of flattened text.
@@ -77,22 +110,32 @@ window = int(os.environ["WINDOW"])
 # mention in one paragraph with an unrelated "is missing" further down the page.
 NEAR = 60
 
-docs = []
-for dirpath, dirnames, filenames in os.walk(root):
-    dirnames[:] = [d for d in dirnames if d not in (".venv", ".git", "node_modules", "__pycache__")]
-    for fn in filenames:
-        if fn.endswith(".md"):
-            docs.append(os.path.join(dirpath, fn))
-docs.sort()
+SKIP_DIRS = (".venv", ".git", "node_modules", "__pycache__")
+
+
+def collect(base, exts):
+    """Every file under `base` (a dir or a single file) with one of `exts`."""
+    full = os.path.join(root, base)
+    if os.path.isfile(full):
+        return [full] if full.endswith(exts) else []
+    found = []
+    for dirpath, dirnames, filenames in os.walk(full):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        found += [os.path.join(dirpath, fn) for fn in filenames if fn.endswith(exts)]
+    return found
+
+
+docs = sorted({p for base in instruction_paths for p in collect(base, (".md",))})
 
 sites = fails = 0
 mentioning = 0
+classified = set()          # (abspath, line) of everything a rule looked at — for the advisory pass
 for path in docs:
     try:
         raw = open(path, encoding="utf-8").read()
     except (OSError, UnicodeDecodeError):
         continue
-    if not mention.search(raw):
+    if not (mention.search(raw) or target_mention in raw):
         continue
     mentioning += 1
     lines = raw.splitlines()
@@ -134,8 +177,53 @@ for path in docs:
             fails += 1
             how = "states the init precondition with NO directory-existence guard"
         rel = os.path.relpath(path, root)
-        print("  %s:%d → %s  %s" % (rel, n, "PASS" if ok else "FAIL", how))
+        classified.add((path, n))
+        print("  [init]   %s:%d → %s  %s" % (rel, n, "PASS" if ok else "FAIL", how))
 
+    # ---- class 2: TARGET — "submit a code task against project:demo-app" ----
+    for m in re.finditer(re.escape(target_mention), flat):
+        sites += 1
+        n = line_map[m.start()]
+        lo, hi = max(1, n - window), min(len(lines), n + window)
+        ctx = re.sub(r"\s+", " ", "\n".join(lines[lo - 1: hi]))
+        if target_guard in ctx:
+            how, ok = "conditional on the sample existing", True
+        elif target_alt in ctx:
+            how, ok = "offers the roster as the alternative target", True
+        else:
+            how, ok = ("sends the reader at project:demo-app unconditionally — with the sample "
+                       "deleted that target does not exist"), False
+            fails += 1
+        rel = os.path.relpath(path, root)
+        classified.add((path, n))
+        print("  [target] %s:%d → %s  %s" % (rel, n, "PASS" if ok else "FAIL", how))
+
+# ---- ADVISORY (judges nothing; makes under-discovery visible) ----
+# Wider net, wider file types: anything that looks like an instruction to git-init the sample. Every
+# hit the two classifiers above did NOT look at gets printed. A classifier loose enough to catch
+# paraphrases fires on prose too, so this reports rather than fails — but an unreported gap in a
+# self-discovering judge is the failure its own header warns about.
+ADVISORY_HINT = re.compile(r"git\s+-C\s+[\"']?\$?\{?[A-Za-z_]*demo-app|demo-app.{0,40}\bgit init\b"
+                           r"|\bgit init\b.{0,40}demo-app", re.I)
+# A classified instruction spans a paragraph plus its fenced command block, so hits a few lines
+# below it are the SAME instruction, already judged. Suppress that neighbourhood or the advisory
+# reports the very lines the rules just passed — noise that trains the reader to ignore it.
+ADVISORY_NEAR = 12
+advisory = []
+for base in instruction_paths + ["standup/standup.workflow.js", "setup.sh", "standup/team.json"]:
+    for path in collect(base, (".md", ".js", ".json", ".sh")):
+        try:
+            lines2 = open(path, encoding="utf-8").read().splitlines()
+        except (OSError, UnicodeDecodeError):
+            continue
+        for i, ln in enumerate(lines2, 1):
+            if ADVISORY_HINT.search(ln) and not any(
+                    p == path and abs(q - i) <= ADVISORY_NEAR for (p, q) in classified):
+                advisory.append("%s:%d  %s" % (os.path.relpath(path, root), i, ln.strip()[:100]))
+
+print("#ADVISORY %d" % len(advisory))
+for a in advisory:
+    print("#ADV %s" % a)
 print("#SITES %d %d %d" % (sites, fails, mentioning))
 PYEOF
 )"; rc=$?
@@ -144,7 +232,16 @@ $out"
 
   local tally; tally="$(grep '^#SITES ' <<<"$out")"
   [[ -n "$tally" ]] || die_judge "the discovery pass produced no tally line"
-  grep -v '^#SITES ' <<<"$out"
+  grep -v '^#SITES \|^#ADV' <<<"$out"
+
+  # Advisory: printed, never scored. See the header for why this is not a failure.
+  local adv_n; adv_n="$(sed -n 's/^#ADVISORY //p' <<<"$out")"
+  if [[ "${adv_n:-0}" != "0" ]]; then
+    printf '\n  advisory — %s instruction-shaped line(s) NO rule classified (not scored):\n' "$adv_n"
+    sed -n 's/^#ADV /    /p' <<<"$out"
+    printf '  If one of those is a real precondition, it needs a rule — the classifier is narrow\n'
+    printf '  on purpose and does not read paraphrases.\n'
+  fi
 
   local s f mentioning
   read -r _ s f mentioning <<<"$tally"
@@ -170,33 +267,49 @@ self_test() {
   local dir; dir="$(mktemp -d)"
   # shellcheck disable=SC2064
   trap "rm -rf '$dir'" EXIT
-  (cd "$REPO" && grep -rlE "$MENTION" --include='*.md' . 2>/dev/null | grep -v '/\.venv/' \
-     | while IFS= read -r f; do mkdir -p "$dir/$(dirname "$f")"; cp "$f" "$dir/$f"; done)
+  # Copy the whole instruction surface, so the mutated tree is the real one plus the planted files.
+  local p
+  for p in "${INSTRUCTION_PATHS[@]}"; do
+    if [[ -d "$REPO/$p" ]]; then mkdir -p "$dir/$p" && cp -R "$REPO/$p/." "$dir/$p/"
+    elif [[ -f "$REPO/$p" ]]; then mkdir -p "$dir/$(dirname "$p")" && cp "$REPO/$p" "$dir/$p"; fi
+  done
 
-  printf '=== --self-test: a NEW document restates the precondition without a guard ===\n'
+  printf '=== --self-test: NEW documents restate BOTH preconditions without a guard ===\n'
   printf 'Written to a throwaway copy (%s), never to the repo.\n' "$dir"
-  cat > "$dir/NEWCOMER.md" <<'EOF'
+  # One planted file per site class. Planting only the init class would leave the target class with
+  # no proof it can fail — the same "covered on paper" gap this judge was revised to close.
+  mkdir -p "$dir/skills/newcomer"
+  cat > "$dir/skills/newcomer/SKILL.md" <<'EOF'
 # Some future document
 
 1. **Ensure the work repo is ready.** If `demo-app/.git` does not exist, run:
    `git -C demo-app init -b main`
+2. Then open the portal and submit a code task (target `project:demo-app`).
 EOF
   fails=0; sites=0
   local report; report="$(audit_tree "$dir")"
   printf '%s\n' "$report"
 
-  # The assertion is about THE NEW FILE specifically, not about `fails > 0`. While the repo still
-  # has unguarded sites of its own, "some check went red" would pass even if NEWCOMER.md were never
-  # discovered — a self-test that green-lights on somebody else's failure proves nothing.
-  if ! grep -q '^  NEWCOMER\.md:[0-9]* → FAIL' <<<"$report"; then
-    printf '\n!! SELF-TEST FAILED — the new unguarded document was not discovered and failed.\n' >&2
+  # The assertion is about THE NEW FILE specifically, and about BOTH classes by name — not about
+  # `fails > 0`. "Some check went red" would pass on somebody else's failure while the planted site
+  # was never discovered, and it would pass with one whole site class unproven.
+  local missed=""
+  grep -q '^  \[init\]   skills/newcomer/SKILL\.md:[0-9]* → FAIL' <<<"$report" \
+    || missed="$missed
+    the planted [init] site was not discovered and failed"
+  grep -q '^  \[target\] skills/newcomer/SKILL\.md:[0-9]* → FAIL' <<<"$report" \
+    || missed="$missed
+    the planted [target] site was not discovered and failed"
+  if [[ -n "$missed" ]]; then
+    printf '\n!! SELF-TEST FAILED — a planted unguarded site was missed:%s\n' "$missed" >&2
     printf '   Self-discovery is the entire point; without it this is a hardcoded list.\n' >&2
+    printf '%s\n' "$report" >&2
     return 3
   fi
   # `audit_tree` ran in a command substitution, so its globals did not survive; count from the
   # report itself rather than printing a stale 0.
   local n; n="$(grep -c ' → \(PASS\|FAIL\)' <<<"$report")"
-  printf '\n--self-test → PASS  (the unplanned site NEWCOMER.md was discovered and failed; %s site(s) audited)\n' "$n"
+  printf '\n--self-test → PASS  (both planted site classes discovered and failed; %s site(s) audited)\n' "$n"
   return 0
 }
 

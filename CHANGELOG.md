@@ -22,9 +22,11 @@ afterwards is the obvious next move. It was never a supported path:
   appears in `skills/standup`, `skills/work`, `skills/team`, `.claude/commands/standup.md` and
   `CLAUDE.md`. Exactly one — `skills/standup` — also said *"(and a `demo-app/` exists)"*. The four
   that did not include `/work`, the most-used entry point of the three that dispatch work.
-- **`/eval` went silent.** The gold-set hardcoded `"target": "demo-app"` and both cases imported
-  `textkit`. With the sample gone there was no target, no case could run, and nothing said so. A
-  regression suite that reports nothing is indistinguishable from one nobody ran.
+- **`/eval` went silent about *which cases it could not run*.** The gold-set hardcoded
+  `"target": "demo-app"` and both cases imported `textkit`. With the sample gone there was no
+  target, no case could run, and nothing said so. A regression suite that reports nothing is
+  indistinguishable from one nobody ran. **This release fixes the reporting, not the running** —
+  see the known limitation below.
 
 ### What changed
 
@@ -51,12 +53,41 @@ afterwards is the obvious next move. It was never a supported path:
   listed under Tests since it was written while CI never ran it — the one judge covering "the machine
   is aimed at the wrong thing" was itself unenforced.
 
-Writing the judges caught three defects in the judges themselves, each the same shape as the bug
-being fixed: the parity judge matched line by line and silently found 4 of 5 sites (`skills/work`
-wraps "is" / "missing:" across a newline); it then failed a correctly-guarded paragraph because the
-guard phrase straddled a line while discovery did not; and the eval judge's self-test reported PASS
-off an unrelated failure while its mutation quietly no-opped. Under-discovery and false-attribution
-in a judge read as green, which is why each one is now asserted by name.
+### Known limitation — `/eval` still cannot run a case in an isolated copy
+
+Fixed here: `/eval` now says which cases it skipped and why. **Not fixed here:** the copy-based
+isolation its own recipe describes does not survive contact with the engine. Review commands are
+built as `git -C ${folder} diff -- .` from the roster's `folder` (`standup/standup.workflow.js`
+`:573` → `:1299`/`:1307`/`:1368`), and `git -C` resolves against the process cwd — so the reviewer
+reads the *real* target while the work happened in the copy, yielding an empty diff reported as
+`review-failed`. Re-pointing `folder` at the copy is refused by the ownership stop at `:567-572`.
+`skills/eval/SKILL.md` now carries this warning inline with the two workarounds. Do not read a
+`review-failed` from an eval as a quality regression without checking which directory was read.
+
+### On the judges themselves
+
+Writing and then reviewing these judges caught **six** defects in the judges, every one of which
+read as green — the same disease they were written to catch, one level up:
+
+- the parity judge matched line by line and silently found 4 of 5 sites (`skills/work` wraps "is" /
+  "missing:" across a newline), then failed a correctly-guarded paragraph because the guard phrase
+  straddled a line while discovery did not;
+- it walked all 43 markdown files, so a **changelog entry recounting this very bug** would have
+  failed it — it passed only because narrative prose happened to repeat the guard phrase two lines
+  later. It now reads the instruction surface (`skills/`, `.claude/commands/`, `CLAUDE.md`,
+  `README.md`) and leaves records alone;
+- it knew exactly one sentence shape, so `/portal` telling users to target `project:demo-app`
+  unconditionally was invisible to it — the pair this release's own note promised to keep in sync;
+- the setup judge's window stopped at the section-6 marker, excluding a guard **this release
+  added** twelve lines later, and passed all-green over code it could not see;
+- the eval judge had no fixture where `requires` differed from `target`, so that entire branch
+  could be deleted with every check still green;
+- and its self-test reported PASS off an unrelated failure while the mutation quietly no-opped.
+
+Every self-test now asserts the **named** checks that must go red, the parity judge prints an
+advisory list of instruction-shaped lines no rule classified, and each judge states what it does
+not cover. A judge that reports a confident count over a surface it only partly reads is worse
+than a hardcoded list, because the list at least shows its coverage.
 
 ## [0.3.8] — 2026-08-05
 

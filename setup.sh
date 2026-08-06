@@ -83,7 +83,11 @@ if [[ -d "$DEMO" ]]; then
     echo "==> git-init demo-app + a LOCAL bare origin (offline, no network)"
     git -C "$DEMO" init -q -b main
     git -C "$DEMO" add -A
-    git -C "$DEMO" -c user.name="demo" -c user.email="demo@local" commit -q -m "demo-app: initial import"
+    # --allow-empty: an EMPTY demo-app/ (or one whose files are all ignored) stages nothing, and a
+    # commit with nothing staged exits 1 — which under `set -e` aborts the installer just as surely
+    # as the missing directory did. With content it behaves exactly as before; without, it still
+    # creates `main` so the push below and the worktree flow's origin/main resolution both work.
+    git -C "$DEMO" -c user.name="demo" -c user.email="demo@local" commit -q --allow-empty -m "demo-app: initial import"
   fi
   if [[ ! -d "$ORIGIN" ]]; then
     git init -q --bare -b main "$ORIGIN" 2>/dev/null || git init -q --bare "$ORIGIN"

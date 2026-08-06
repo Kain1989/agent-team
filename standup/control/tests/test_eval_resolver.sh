@@ -49,9 +49,16 @@ run_resolver() { # <resolver-path> <fixture-dir> <cases-json-text> [dirs-to-crea
   LAST_RC=$?
 }
 
+# Case `c` is the one that makes `requires` mean anything: its target IS present and its `requires`
+# is NOT. Every other fixture has requires == target, and `requires` DEFAULTS to target — so
+# without `c` the entire requires branch could be deleted and this judge stayed green (measured:
+# `elif False:` on that branch alone, all checks PASS, exit 0, while the resolver flipped a real
+# case from SKIP to run). `requires` is a field this batch introduced and the gold-set's own
+# `_targets` note invites users to write; shipping it with no covering case is shipping a promise.
 CASES_BOTH='{"target":"demo-app","cases":[
   {"id":"a","requires":"demo-app","prompt":"p","check":"true"},
-  {"id":"b","target":"my-repo","requires":"my-repo","prompt":"p","check":"true"}]}'
+  {"id":"b","target":"my-repo","requires":"my-repo","prompt":"p","check":"true"},
+  {"id":"c","target":"my-repo","requires":"golden-fixtures","prompt":"p","check":"true"}]}'
 CASES_NO_TARGET='{"cases":[{"id":"a","prompt":"p","check":"true"}]}'
 CASES_MISSING_FIELD='{"target":"demo-app","cases":[{"id":"a","prompt":"p"}]}'
 CASES_MALFORMED='{"target":"demo-app","cases":[  '
@@ -60,20 +67,25 @@ run_cases() { # <resolver-path> <label-prefix>
   local R="$1" pfx="${2:-}"
   local dir
 
-  section "${pfx}A. both targets present — both cases run"
+  section "${pfx}A. targets present — cases run, EXCEPT the one whose \`requires\` is absent"
   dir="$(mktemp -d)"; run_resolver "$R" "$dir" "$CASES_BOTH" demo-app my-repo
   check "${pfx}exit 0" "$([[ $LAST_RC -eq 0 ]] && echo 1 || echo 0)" "exit=$LAST_RC"
-  check "${pfx}2 runnable, 0 skipped" \
-    "$(grep -q '2 runnable, 0 skipped' <<<"$LAST_OUT" && echo 1 || echo 0)" \
+  check "${pfx}2 runnable, 1 skipped" \
+    "$(grep -q '2 runnable, 1 skipped' <<<"$LAST_OUT" && echo 1 || echo 0)" \
     "$(head -1 <<<"$LAST_OUT")"
+  check "${pfx}\`requires\` skips a case whose TARGET is present" \
+    "$(grep -qE '^ +SKIP +c ' <<<"$LAST_OUT" && echo 1 || echo 0)" \
+    "without this, the whole requires branch is dead code no fixture reaches"
+  check "${pfx}and names the missing requirement, not the target" \
+    "$(grep -E '^ +SKIP +c ' <<<"$LAST_OUT" | grep -q "golden-fixtures" && echo 1 || echo 0)"
   rm -rf "$dir"
 
   section "${pfx}B. the sample was deleted — its case SKIPS, the other still runs"
   dir="$(mktemp -d)"; run_resolver "$R" "$dir" "$CASES_BOTH" my-repo
   check "${pfx}exit 0 (a missing sample is not an error)" \
     "$([[ $LAST_RC -eq 0 ]] && echo 1 || echo 0)" "exit=$LAST_RC"
-  check "${pfx}1 runnable, 1 skipped" \
-    "$(grep -q '1 runnable, 1 skipped' <<<"$LAST_OUT" && echo 1 || echo 0)" \
+  check "${pfx}1 runnable, 2 skipped" \
+    "$(grep -q '1 runnable, 2 skipped' <<<"$LAST_OUT" && echo 1 || echo 0)" \
     "$(head -1 <<<"$LAST_OUT")"
   check "${pfx}the skip is marked SKIP, never counted as a pass" \
     "$(grep -qE '^ +SKIP +a ' <<<"$LAST_OUT" && echo 1 || echo 0)"
@@ -86,8 +98,8 @@ run_cases() { # <resolver-path> <label-prefix>
   section "${pfx}C. everything is gone — 'nothing to run' is SAID, not implied"
   dir="$(mktemp -d)"; run_resolver "$R" "$dir" "$CASES_BOTH"
   check "${pfx}exit 0" "$([[ $LAST_RC -eq 0 ]] && echo 1 || echo 0)" "exit=$LAST_RC"
-  check "${pfx}0 runnable, 2 skipped" \
-    "$(grep -q '0 runnable, 2 skipped' <<<"$LAST_OUT" && echo 1 || echo 0)" \
+  check "${pfx}0 runnable, 3 skipped" \
+    "$(grep -q '0 runnable, 3 skipped' <<<"$LAST_OUT" && echo 1 || echo 0)" \
     "$(head -1 <<<"$LAST_OUT")"
   check "${pfx}prints an explicit 'nothing to run' explanation" \
     "$(grep -qi 'nothing to run here' <<<"$LAST_OUT" && echo 1 || echo 0)"
@@ -161,8 +173,14 @@ self_test() {
 
   # Assert the NAMED cases went red, not merely that something did.
   local missed=""
-  local want_b="[mutated] 1 runnable, 1 skipped"
-  local want_c="[mutated] 0 runnable, 2 skipped"
+  local want_a='[mutated] `requires` skips a case whose TARGET is present'
+  local want_b="[mutated] 1 runnable, 2 skipped"
+  local want_c="[mutated] 0 runnable, 3 skipped"
+  # A is listed separately from B/C on purpose: it is the ONLY check that fails when the `requires`
+  # branch alone is removed. B and C both stay green under that mutation, which is how a whole
+  # branch shipped with no covering case and a green judge.
+  grep -qxF "$want_a" <<<"$FAILED_NAMES" || missed="$missed
+    A did not go red: $want_a"
   grep -qxF "$want_b" <<<"$FAILED_NAMES" || missed="$missed
     B did not go red: $want_b"
   grep -qxF "$want_c" <<<"$FAILED_NAMES" || missed="$missed
