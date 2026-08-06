@@ -30,6 +30,7 @@ If `--kind` is missing — or `--kind` is anything but `none` and `--inspect` is
 no command to ask for; treating it as missing would refuse a complete invocation with a fix the
 caller cannot satisfy. (`--inspect none` is not a magic value — it is stored as the literal string.)
 
+Then, depending on where you are running:
 
 - **Interactive session** → ask for it. Explain what it is (below) and wait.
 - **Non-interactive** (`claude -p`, a scheduled run, a workflow agent — anything with no human at
@@ -79,8 +80,10 @@ so a repo with no origin will fail later at a confusing place.
 ## Step 2 — the review surface, and why it is not optional
 
 The engine **refuses to run** a squad that declares no `review_surface`, and refuses one whose
-`kind` is anything but the six above, and refuses one with a blank `inspect`. That is deliberate:
-a squad with no declared surface is a team nobody can check the output of.
+`kind` is anything but the six above, and — **for every kind except `none`** — refuses one with a
+blank `inspect`. That exception is in the engine, not a courtesy: `surface.kind !== 'none' &&
+!inspect.trim()`. `none` means there is no face to inspect, so there is nothing to demand. That is
+deliberate: a squad with no declared surface is a team nobody can check the output of.
 
 - `kind` is a label. **`inspect` is the load-bearing field** — the deterministic way to actually see
   what a user sees. A URL for `web`; the command that prints the report for `report`; the question
@@ -105,6 +108,8 @@ Read it first, refuse a duplicate squad id, then insert into `teams[]`:
   "coordination": "Two paired developer-agents who challenge each other's plans and diffs in a FRESH context (pairs critique, they do not debate).",
   "review_surface": { "kind": "<K>", "label": "<what a stranger would call it>", "url": "<if web>",
                       "inspect": "<CMD>", "how": "<any prerequisite, stated inline>" },
+  // for kind "none": drop `inspect` and `url`. Do NOT invent a placeholder — nothing validates
+  // `inspect` when kind is "none", so a made-up value passes every check and lies forever after.
   "developers": [
     { "id": "<name>_a", "folder": "<name>", "role": "Developer — Builder", "stack": "<infer from the repo>",
       "git": true, "active": true, "pair": "<name>_b", "focus": "implement backlog items with tests",

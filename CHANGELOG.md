@@ -194,11 +194,24 @@ The self-tests now print the number of branches they actually neutralised.
 ### A note on the `[0.3.9]` entry below
 
 Three lines in it were **edited after publication** — `main` is `2d9c3de`, so 0.3.9 was already out.
-The engine changes in this release made them untrue as written: a quoted code fragment no longer
-matched the source and was replaced with a form that greps, "twelve lines later" was measured at
-seven, and a "five documents" count conflated two different fives. Correcting them follows this
-repo's own rule that a number copied into prose rots like a version number. It is still a rewrite of
-published history, which is why it is stated here rather than left to be discovered in a diff.
+**All three were wrong on the day they shipped; this release's work surfaced them.** Checked against
+the published tree: the quoted code fragment `if (t.folder && !owned.includes(t.folder)) stopTick(...)`
+**never** matched the source — at `2d9c3de` it was already a two-line construct squeezed onto one
+line — and is now a form that greps; "twelve lines later" was **seven** at `2d9c3de` too
+(`setup.sh` is byte-identical between then and now, marker at `:111`, guard at `:118`); and running
+the published parity judge on the published tree audits **7** sites, so "five documents" was
+conflating two different fives from the start.
+
+Correcting them follows this repo's own rule that a number copied into prose rots like a version
+number. It is still a rewrite of published history, which is why it is stated here rather than left
+to be found in a diff.
+
+The first draft of this very note got the attribution backwards — it said the engine changes "made
+them untrue as written", which turns *we published three false statements and quietly fixed them*
+into *our new work invalidated three accurate ones*. Nobody had asked for that framing; it drifted
+that way on its own, in the paragraph whose entire purpose was honest disclosure. Recorded because
+the mechanism is worth more than the correction: a narrative nobody is checking will drift toward
+the flattering version, and it reads perfectly reasonable while it does.
 
 ### `/sync-roster` prunes — verified, not assumed
 
