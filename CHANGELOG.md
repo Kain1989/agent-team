@@ -125,6 +125,12 @@ macOS case-folding: CI is `ubuntu-latest` and case-sensitive, so a `STANDUP/` de
 resolve there, "the decoy is untouched" would be vacuously true, and the `E-03` mutation would stay
 green on the only machine that runs it automatically.
 
+One coverage hole found at the integration gate and fixed there: `test_arm_path.sh`'s "nearest
+wins" check was `grep -qi 'first'`, which matches the prompt's prose in two places — so deleting the
+`break` from the shipped walk, making the **outermost** install win (the nested-install hijack that
+resolution exists to kill), left the judge at exit 0. It now greps the loop control itself. The
+sibling anchor-pair check had been hardened for this exact reason and this one was left loose.
+
 `test_remove_project.sh`'s central assertion is **byte equality** of `team.json` after add → remove
 — what makes "surgical edit" testable rather than aspirational. Case B earns it: a parse-and-dump
 removal still parses, still carries identical DATA, and is caught only by the byte compare. The
@@ -158,11 +164,41 @@ The self-tests now print the number of branches they actually neutralised.
 - **One headless run in five returned exit 0 having done nothing** — it printed an intention and
   stopped. 4/5 were correct and 0/5 hung, so the refuse-rather-than-hang requirement holds; an
   exit-0 no-op is the worst shape for an unattended caller. **Observed once, not reproduced.**
+- **Editing the roster while a run is in flight produces the WRONG diagnosis and leaves the gate
+  open.** `args.roster` is the launcher's snapshot at t=0; the Arm agent re-reads `team.json` from
+  **disk** later, in Phase 3.5. Run `/add-project` or `/remove-project` inside that window and the
+  two projections diverge, so the identity assertion throws `ARM armed the WRONG install` — a
+  diagnosis that is simply wrong for this cause, and whose fix line ("launch the Workflow with a cwd
+  inside the install you mean to run") does not apply. Worse, the flag is already set by then, and
+  `disarmTeamRunExemption()` is called at top level rather than in a `finally`, so the throw skips
+  it: **the user's supervisor gate stays OFF for up to 6h**. The window is short for `/work` and
+  **hours** for `/standup`, where Arm follows the whole roster poll.
+  It fails **safely** — it stops rather than arming the wrong tree, and not disarming is the
+  *correct* behaviour in a genuine wrong-install case, which is why this is not a quick fix: telling
+  the two apart is a real engine change, and the 6h TTL is the backstop meanwhile. Direction when it
+  is fixed: compare the two id sets, and if the armed set is a superset/subset of `ARM_EXPECT_*`
+  with a plausible `resolved_root`, say "the roster changed during this run (added: …) — relaunch"
+  instead of "wrong install". Both new commands now carry a "do not run this during `/standup` or
+  `/work`" warning.
+- **`test_add_project.sh` and `test_remove_project.sh` have no minimum-case floor.** Deleting
+  `run_cases` entirely yields `all checks PASS`, exit 0. Their `--self-test` also only asserts that
+  the named case goes RED, not that the others stay green — every one of the 14 mutations is
+  surgical today (each reddens exactly its own case, spot-checked independently), but a future
+  catastrophic mutation would read as a pass.
 - **Filesystem access from a workflow script has never been observed either way.** `RULE_IDS_SOURCE`
   only ever entered the return object, so 27 recorded runs say nothing. Rather than spend a run
   finding out, both paths were made correct: Arm needs no `fs` at all, and the rulebook read treats
   no-`fs` as a **degrade** that says so, never a stop. It is now logged, so the next real tick
   becomes the evidence.
+
+### A note on the `[0.3.9]` entry below
+
+Three lines in it were **edited after publication** — `main` is `2d9c3de`, so 0.3.9 was already out.
+The engine changes in this release made them untrue as written: a quoted code fragment no longer
+matched the source and was replaced with a form that greps, "twelve lines later" was measured at
+seven, and a "five documents" count conflated two different fives. Correcting them follows this
+repo's own rule that a number copied into prose rots like a version number. It is still a rewrite of
+published history, which is why it is stated here rather than left to be discovered in a diff.
 
 ### `/sync-roster` prunes — verified, not assumed
 

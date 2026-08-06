@@ -13,6 +13,11 @@ reversible; deleting a working tree is neither, and an agent should not do it on
 directory is left exactly where it is and the path is printed so you can remove it yourself if you
 want to.
 
+> **Do not run this while `/standup` or `/work` is running.** Those runs snapshot the roster at
+> launch and re-read `standup/team.json` from disk later, so editing it mid-run makes the two
+> disagree and the run stops with a misleading `ARM armed the WRONG install`. See the known gap in
+> `CHANGELOG.md` (0.4.0).
+
 ## Step 1 — check what else points at it, BEFORE changing anything
 
 A squad is referenced from more places than its own entry. Report every hit and let the user decide;

@@ -17,9 +17,19 @@ INPUT: `$ARGUMENTS` — `<git-url> [name] [--kind K] [--inspect CMD]`
 previously had to be done by hand and in the right order. Three of the four were documented; the
 fourth was not, which is how people ended up with a team pointed at a directory that did not exist.
 
+> **Do not run this while `/standup` or `/work` is running.** Those runs snapshot the roster at
+> launch and re-read `standup/team.json` from disk later, so editing it mid-run makes the two
+> disagree and the run stops with a misleading `ARM armed the WRONG install`. See the known gap in
+> `CHANGELOG.md` (0.4.0).
+
 ## Step 0 — decide whether you can ask questions at all
 
-If `--kind` or `--inspect` is missing:
+If `--kind` is missing — or `--kind` is anything but `none` and `--inspect` is missing:
+
+**`--kind none` needs no `--inspect`.** `none` declares "this has no inspectable face", so there is
+no command to ask for; treating it as missing would refuse a complete invocation with a fix the
+caller cannot satisfy. (`--inspect none` is not a magic value — it is stored as the literal string.)
+
 
 - **Interactive session** → ask for it. Explain what it is (below) and wait.
 - **Non-interactive** (`claude -p`, a scheduled run, a workflow agent — anything with no human at
@@ -28,7 +38,8 @@ If `--kind` or `--inspect` is missing:
   with nothing to show for it.
 
 ```
-/add-project <git-url> <name> --kind <web|report|agent|api|cli|none> --inspect "<command>"
+/add-project <git-url> <name> --kind <web|report|agent|api|cli> --inspect "<command>"
+/add-project <git-url> <name> --kind none                      # a surface with no face
 ```
 
 Say plainly which flag was missing and that nothing was changed. Do not clone first and ask after —

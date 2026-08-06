@@ -38,7 +38,7 @@ jobs:
         # mis-routed task must still stop rather than run the pipeline against the wrong repo.
         # README has listed this under Tests since it was written; CI never ran it, so the one
         # judge covering "the machine is aimed at the wrong thing" was itself unenforced.
-        # --self-test first, like the other four: it was the one judge whose teeth CI never checked.
+        # --self-test first, like every other judge that has one: this was the one whose teeth CI never checked.
         run: |
           node standup/control/tests/test_sdlc_routing.js --self-test
           node standup/control/tests/test_sdlc_routing.js
@@ -47,7 +47,7 @@ jobs:
         # The paths a NEW user walks: the installer with the sample deleted, the five documents
         # that state the demo-app precondition, and the eval gold-set's RUN/SKIP resolution.
         # Each runs its own --self-test first, because a judge that has never been shown to fail
-        # is not a judge (E-03) — and each of these three caught a real defect in its own logic
+        # is not a judge (E-03) — and each of these caught a real defect in its own logic
         # the first time it was pointed at the tree.
         run: |
           bash standup/control/tests/test_setup_guard.sh --self-test

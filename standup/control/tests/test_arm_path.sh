@@ -236,8 +236,14 @@ source_checks() {
     "a bare -d standup/ test matches any neighbour that merely has the directory"
   check "the prompt walks UP rather than trusting cwd" \
     "$(grep -q 'dirname' <<<"$armprompt" && echo 1 || echo 0)"
+  # Grep the LOOP CONTROL, not the word "first". `grep -qi 'first'` matched the prose ("take the
+  # FIRST directory") and also "The first printed line is team_ids", so deleting the `break` from
+  # the shipped walk — which makes the OUTERMOST install win, the nested-install hijack resolution
+  # exists to kill — left this PASSing at exit 0. The sibling anchor-pair check was hardened for
+  # exactly this reason two lines up and this one was left loose.
   check "the prompt stops at the FIRST match (nested installs: nearest wins)" \
-    "$(grep -qi 'first' <<<"$armprompt" && echo 1 || echo 0)"
+    "$(grep -qF 'ROOT="$D"; break' <<<"$armprompt" && echo 1 || echo 0)" \
+    "without the break the OUTERMOST install wins"
   check "the prompt forbids inventing a directory when no root resolves" \
     "$(grep -qi 'do not .*mkdir\|Do not invent' <<<"$armprompt" && echo 1 || echo 0)"
   check "the prompt verifies via the flag reader, not ls" \
