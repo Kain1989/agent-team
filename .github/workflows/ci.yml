@@ -58,6 +58,10 @@ jobs:
           bash standup/control/tests/test_eval_resolver.sh
           bash standup/control/tests/test_arm_path.sh --self-test
           bash standup/control/tests/test_arm_path.sh
+          bash standup/control/tests/test_add_project.sh --self-test
+          bash standup/control/tests/test_add_project.sh
+          bash standup/control/tests/test_remove_project.sh --self-test
+          bash standup/control/tests/test_remove_project.sh
 
       - name: Design judge self-test
         # DESIGN_RULEBOOK E-03: prove the judge FAILS on deliberately broken UI. A design gate
