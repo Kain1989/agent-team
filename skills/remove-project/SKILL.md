@@ -33,26 +33,44 @@ Read `standup/team.json`, then `Edit` (not `Write` — the file is hand-formatte
 fields carry the schema documentation):
 
 - delete the `teams[]` entry whose `id` is `<name>`, with its developers;
-- delete the `/<name>/` line from `.gitignore`.
+- **leave the `/<name>/` line in `.gitignore` alone** — as long as the clone is still on disk, that
+  line is the only thing stopping the next `git add -A` from recording it as a gitlink. Removing
+  it does not tidy up; it re-arms the hazard `/add-project` exists to prevent, silently. Remove the
+  line only if the directory is already gone.
 
 Change nothing else. **Re-parse `standup/team.json`** and stop loudly if it no longer parses.
 
 If `<name>` matches no squad, say so and list the squad ids that do exist. Do not guess at a near
 match — silently acting on a different squad than the one named is worse than doing nothing.
 
-## Step 3 — report
+## Step 3 — verify, with the checker
+
+Before editing, record whether the code directory is there; after editing, hand that to the checker
+so the "never deletes your code" promise is actually tested rather than asserted:
 
 ```
-Removed <name> from the roster.
-  squad     <name> (developers <a>, <b>) removed from standup/team.json
-  ignored   /<name>/ removed from .gitignore
-  code      <ROOT>/<name> is STILL ON DISK — delete it yourself if you want it gone:
-                rm -rf "<ROOT>/<name>"
-  <plus any evals/scope_folders references found in step 1>
+[ -d "$ROOT/<name>" ] && CODE=present || CODE=absent      # BEFORE the edits
+python3 standup/control/verify_project.py removed "<name>" --root "$ROOT" --code-before "$CODE"
+```
 
-Next:
-  /sync-roster      regenerate the native-team agent defs — this DELETES the generated
-                    .claude/agents/<a>.md and <b>.md for the removed developers
+Non-zero → print the FAIL lines verbatim. The `--code-before` value is what lets the checker fail
+when the directory that was there is gone: without it the check can only ever say `ok`, which is
+decoration wearing the costume of verification.
+
+## Step 4 — report
+
+Lead with the action the user still has to take. Substitute every `<…>` — print the real absolute
+path, never the placeholder.
+
+```
+Next:  /sync-roster      (removes the generated .claude/agents/<a>.md and <b>.md)
+
+Removed <name>: squad + developers <a>, <b> from standup/team.json.
+  code       /abs/path/<name> is still on disk — delete it yourself if you want it gone:
+                 rm -rf "/abs/path/<name>"
+  .gitignore /<name>/ KEPT, on purpose: while that directory exists, the line is what stops
+             `git add -A` recording it as a gitlink. Delete the line after you delete the dir.
+  <plus any evals / scope_folders references found in step 1>
 ```
 
 `/sync-roster` prunes: the generator rewrites the whole directory and unlinks any file carrying its

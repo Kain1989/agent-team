@@ -12,8 +12,11 @@
 # git problem rather than an onboarding one.
 #
 # WHAT IT DOES NOT GUARD, said plainly. `/add-project` is a PROMPT; this judge cannot run it. What it
-# judges is `standup/control/verify_project.py` — the checker that prompt calls at its final step and
-# that CI runs. So this proves the invariants are CHECKABLE and that the checker has teeth on every
+# judges is `standup/control/verify_project.py` — the checker the prompt runs at its final step and
+# that CI runs. (That wiring was MISSING when this judge first shipped: the comment here asserted it
+# as fact while no skill file mentioned the script. The checker was unreachable from the product
+# path, so the headline gitlink invariant was still enforced only by a sentence in a prompt — which
+# is the thing verify_project.py's own docstring says a prompt cannot do.) So this proves the invariants are CHECKABLE and that the checker has teeth on every
 # branch; it does not prove a model follows the prompt. The terminal output of the command is judged
 # by a human walkthrough, which is the right instrument for that half.
 #
@@ -80,6 +83,8 @@ JSON
 apply_add() { # <sandbox> <name> <skip: none|clone|squad|surface|inspect|gitignore|pair|folder>
   local d="$1" name="$2" skip="${3:-none}" root="$d/proj"
   [[ "$skip" == "clone" ]] || git -C "$root" clone -q "$d/upstream" "$name"
+  # `nogit`: the directory exists but is not a repo — a copied folder, or a clone that half-failed.
+  [[ "$skip" == "nogit" ]] && { mkdir -p "$root/$name"; rm -rf "$root/$name/.git"; }
   [[ "$skip" == "gitignore" ]] || printf '/%s/\n' "$name" >> "$root/.gitignore"
   [[ "$skip" == "squad" ]] && return 0
   SKIP="$skip" NAME="$name" python3 - "$root/standup/team.json" <<'PY'
@@ -98,6 +103,10 @@ devs = [
 ]
 if skip == "pair":
     devs = devs[:1]
+if skip == "badpair":
+    devs[0]["pair"] = "somebody_else"          # resolves to nobody in this squad
+if skip == "badkind":
+    surface["kind"] = "webb"                   # the typo this check exists to stop
 if skip == "folder":
     for x in devs:
         x["folder"] = "somewhere-else"
@@ -181,9 +190,81 @@ run_cases() { # <label-prefix>
     "$([[ $LAST_RC -eq 1 ]] && grep -q "folder\` is the project directory" <<<"$LAST_OUT" && echo 1 || echo 0)"
   rm -rf "$d"
 
+  d="$(build_project)"; apply_add "$d" "myapp" nogit; verify "$d/proj" myapp
+  check "${pfx}a directory that is not a git repo is caught" \
+    "$([[ $LAST_RC -eq 1 ]] && grep -q 'FAIL the project is a git repo' <<<"$LAST_OUT" && echo 1 || echo 0)" \
+    "the SDLC commits to a feature branch and cannot without one"
+  rm -rf "$d"
+
+  d="$(build_project)"; apply_add "$d" "myapp" badpair; verify "$d/proj" myapp
+  check "${pfx}a pair that resolves to nobody is caught" \
+    "$([[ $LAST_RC -eq 1 ]] && grep -q "FAIL each developer's \`pair\` resolves" <<<"$LAST_OUT" && echo 1 || echo 0)" \
+    "the engine stops the run on an unresolvable pair"
+  rm -rf "$d"
+
+  d="$(build_project)"; apply_add "$d" "myapp" badkind; verify "$d/proj" myapp
+  check "${pfx}an unknown review_surface.kind is caught (--kind webb)" \
+    "$([[ $LAST_RC -eq 1 ]] && grep -q 'FAIL review_surface.kind is one the engine knows' <<<"$LAST_OUT" && echo 1 || echo 0)" \
+    "one of the four advertised invariants — a typo here reaches the engine otherwise"
+  rm -rf "$d"
+
   d="$(build_project)"; apply_add "$d" "myapp" clone; verify "$d/proj" myapp
   check "${pfx}a failed clone is caught" \
     "$([[ $LAST_RC -eq 1 ]] && grep -q 'project directory exists' <<<"$LAST_OUT" && echo 1 || echo 0)"
+  rm -rf "$d"
+
+  section "${pfx}B2. the REMOVED side — every branch of check_removed"
+  # 3 of check_removed's 4 assertions had no covering case, on the command whose headline promise is
+  # "never deletes your code". Each of these neutralises exactly one.
+  d="$(build_project)"; apply_add "$d" "myapp" none
+  LAST_OUT="$(python3 "$VERIFY" removed myapp --root "$d/proj" --code-before present 2>&1)"; LAST_RC=$?
+  check "${pfx}a squad still in the roster is caught by the REMOVED check" \
+    "$([[ $LAST_RC -eq 1 ]] && grep -q 'FAIL the squad is gone from the roster' <<<"$LAST_OUT" && echo 1 || echo 0)"
+  rm -rf "$d"
+
+  # dead ignore entry: directory gone, line left behind
+  d="$(build_project)"; apply_add "$d" "myapp" none
+  python3 - "$d/proj/standup/team.json" <<'PY'
+import json,sys
+p=sys.argv[1]; dd=json.load(open(p)); dd["teams"]=[x for x in dd["teams"] if x["id"]!="myapp"]
+json.dump(dd,open(p,"w"),indent=2)
+PY
+  rm -rf "$d/proj/myapp"
+  LAST_OUT="$(python3 "$VERIFY" removed myapp --root "$d/proj" --code-before present 2>&1)"; LAST_RC=$?
+  check "${pfx}deleting the user's code is caught (the headline promise)" \
+    "$([[ $LAST_RC -eq 1 ]] && grep -q "FAIL the user's code was left alone" <<<"$LAST_OUT" && echo 1 || echo 0)" \
+    "both branches used to call _ok — it printed ok at the moment the promise broke"
+  check "${pfx}a dead .gitignore entry is caught" \
+    "$(grep -q 'FAIL the gitignore entry matches reality' <<<"$LAST_OUT" && echo 1 || echo 0)" \
+    "directory gone, ignore line left behind"
+  rm -rf "$d"
+
+  # the inverse, and the one the walkthrough found: line removed while the clone remains
+  d="$(build_project)"; apply_add "$d" "myapp" none
+  python3 - "$d/proj/standup/team.json" <<'PY'
+import json,sys
+p=sys.argv[1]; dd=json.load(open(p)); dd["teams"]=[x for x in dd["teams"] if x["id"]!="myapp"]
+json.dump(dd,open(p,"w"),indent=2)
+PY
+  grep -v '^/myapp/$' "$d/proj/.gitignore" > "$d/proj/.gi" && mv "$d/proj/.gi" "$d/proj/.gitignore"
+  LAST_OUT="$(python3 "$VERIFY" removed myapp --root "$d/proj" --code-before present 2>&1)"; LAST_RC=$?
+  check "${pfx}removing the ignore line while the clone remains is caught" \
+    "$([[ $LAST_RC -eq 1 ]] && grep -q 'FAIL the gitignore entry matches reality' <<<"$LAST_OUT" && echo 1 || echo 0)" \
+    "that re-arms the gitlink /add-project exists to prevent"
+  rm -rf "$d"
+
+  # staff scope_folders dangling
+  d="$(build_project)"; apply_add "$d" "myapp" none
+  python3 - "$d/proj/standup/team.json" <<'PY'
+import json,sys
+p=sys.argv[1]; dd=json.load(open(p))
+dd["teams"]=[x for x in dd["teams"] if x["id"]!="myapp"]
+dd["staff"]=[{"id":"pm_agent","folder":"standup","scope_folders":["myapp"],"active":True}]
+json.dump(dd,open(p,"w"),indent=2)
+PY
+  LAST_OUT="$(python3 "$VERIFY" removed myapp --root "$d/proj" --code-before present 2>&1)"
+  check "${pfx}a staff scope_folders reference to the removed squad is caught" \
+    "$(grep -q 'staff pm_agent.scope_folders -> myapp' <<<"$LAST_OUT" && echo 1 || echo 0)"
   rm -rf "$d"
 
   section "${pfx}C. an unparseable roster is exit 2, not a quiet invariant failure"
@@ -207,6 +288,13 @@ self_test() {
     "gitlink|elif any(p == name or p.startswith(name + \"/\") for p in links):|elif False:|...and the verifier reports the gitlink too"
     "folder|if wrong:|if False:|a wrong developer folder is caught"
     "clone|if not os.path.isdir(proj):|if False:|a failed clone is caught"
+    "nogit|elif not os.path.isdir(os.path.join(proj, \".git\")):|elif False:|a directory that is not a git repo is caught"
+    "badpair|if unpaired:|if False:|a pair that resolves to nobody is caught"
+    "badkind|if kind not in SURFACE_KINDS:|if False:|an unknown review_surface.kind is caught (--kind webb)"
+    "squad-gone|if any(t.get(\"id\") == name for t in roster.get(\"teams\", [])):|if False:|a squad still in the roster is caught by the REMOVED check"
+    "code-deleted|if code_before == \"present\" and not here:|if False:|deleting the user's code is caught (the headline promise)"
+    "ignore-mismatch|if here and not present:|if False:|removing the ignore line while the clone remains is caught"
+    "staff-scope|if f == name:|if False:|a staff scope_folders reference to the removed squad is caught"
     "surface|if not isinstance(surface, dict):|if False:|missing review_surface is caught"
     "inspect|if kind != \"none\" and not str(surface.get(\"inspect\") or \"\").strip():|if False:|blank inspect is caught (kind alone is not enough)"
     "pair|if len(devs) < 2:|if False:|a LONE developer is caught (no fresh-context critic)"
@@ -235,7 +323,7 @@ PY
     fi
     rm -rf "$d"
   done
-  [[ $rc -eq 0 ]] && printf '\n--self-test → PASS  (every checker branch has an independent covering case)\n'
+  [[ $rc -eq 0 ]] && printf '\n--self-test → PASS  (%d checker branch(es) neutralised; each drove its OWN named case red)\n' "${#muts[@]}"
   return $rc
 }
 

@@ -36,17 +36,44 @@ breaks at add time; it surfaces at commit time looking like a git problem.
 - `/help` now leads with **Setup**: whoever types `/help` most likely just installed this and has no
   project, and the answer to their real question is `/add-project`.
 
-### `standup/control/verify_project.py`
+### `standup/control/verify_project.py`, and the step that runs it
 
 The four invariants are checked by code rather than by a checklist in a prompt, for the same reason
 `/eval`'s RUN/SKIP decision was moved out in 0.3.9: a prompt cannot run `git ls-files -s`. It exits
 1 naming the field to fix, and **2** — not 1 — when `standup/team.json` does not parse, because that
 is not "an invariant failed", it is "nothing can be checked and every other command is also broken".
 
+Both commands run it as their final step. That wiring is the point, and it was missing from the
+first cut of this change: the script existed, CI ran it, two judges tested it — and **no skill file
+mentioned it**, so from the product path it was unreachable and the headline gitlink invariant was
+still enforced only by a sentence in a prompt. The 0.3.9 precedent was cited to justify the design
+and then not followed; `/eval` actually calls its checker at step 0. This repo has the same failure
+already recorded — `/work`, referenced by three governance documents and backed by nothing.
+
+### `/remove-project` keeps the `.gitignore` line
+
+Found by a user walkthrough, not by a judge. Removing the squad used to also remove the ignore
+entry — while deliberately leaving the clone on disk. That does not tidy anything up: it re-arms the
+gitlink this release exists to prevent, silently, on the next `git add -A`. The entry now stays as
+long as the directory does, the output says so, and the checker's invariant is conditional on the
+directory rather than on the roster.
+
+### "Never deletes your code" is now a check that can fail
+
+The single assertion behind that promise — stated in the skill frontmatter, the README table, this
+changelog and the commit message — called `_ok` on **both** branches, including the one where the
+directory was gone. It printed `ok` at the exact moment the promise broke. It cannot be checked
+after the fact, so `/remove-project` records the directory's state before editing and passes
+`--code-before`; without it the checker now reports NOT CHECKED rather than `ok`.
+
 ### Judges
 
-`test_add_project.sh` (7 checker branches, each with its own covering case) and
-`test_remove_project.sh`. The central assertion in the latter is **byte equality** of `team.json`
+`test_add_project.sh` (**14** checker branches, each with its own covering case) and
+`test_remove_project.sh`. The first cut printed "every checker branch has an independent covering
+case" while **six** survived neutralisation — including the `--kind` typo guard, one of the four
+advertised invariants, and three of the four assertions in the `/remove-project` checker. The claim
+was the reverse of the truth, and the judge's own comment noted this pattern had shipped three times
+here already. The self-test now prints the number of branches it actually neutralised. The central assertion in the latter is **byte equality** of `team.json`
 after add → remove: that is what makes "surgical edit" testable rather than aspirational, and case B
 proves it earns its keep — a parse-and-dump removal still parses, still carries identical DATA, and
 is caught only by the byte compare. The judge says in its header that normalising before the compare

@@ -108,12 +108,9 @@ src = src[:m.start()] + src[m.end():]
 src = src.replace('    },\n  ],\n  "staff": [', '    }\n  ],\n  "staff": [', 1)
 open(p, "w", encoding="utf-8").write(src)
 PY
-  python3 - "$root/.gitignore" "$name" <<'PY'
-import sys
-p, name = sys.argv[1], sys.argv[2]
-keep = [l for l in open(p, encoding="utf-8").read().splitlines(True) if l.strip() != "/%s/" % name]
-open(p, "w", encoding="utf-8").writelines(keep)
-PY
+  # NOTE the .gitignore line is deliberately NOT touched. /remove-project leaves the clone on disk,
+  # and while it is there that line is the only thing stopping `git add -A` recording it as a
+  # gitlink. Deleting it does not tidy up — it re-arms the hazard /add-project exists to prevent.
 }
 
 # The NAIVE removal this judge exists to reject: parse, mutate, dump.
@@ -147,17 +144,20 @@ run_cases() { # <label-prefix>
     "$(python3 -c 'import json,sys;json.load(open(sys.argv[1]))' "$root/standup/team.json" >/dev/null 2>&1 && echo 1 || echo 0)"
   remove_surgical "$root" myapp
   after="$root/standup/team.json"
+  # .gitignore is intentionally NOT round-tripped (the line stays with the directory); the surgical
+  # claim is about team.json, which is the hand-formatted file carrying the schema comments.
   check "${pfx}team.json is byte-identical to before the add" \
     "$(cmp -s "$before" "$after" && echo 1 || echo 0)" \
     "$(cmp -s "$before" "$after" || diff <(cat "$before") <(cat "$after") | head -3 | tr '\n' ' ')"
   check "${pfx}the _comment survived (it IS the schema documentation)" \
     "$(grep -q '_comment' "$after" && echo 1 || echo 0)"
-  check "${pfx}.gitignore line is gone" \
-    "$(grep -q '^/myapp/$' "$root/.gitignore" && echo 0 || echo 1)"
+  check "${pfx}.gitignore line is KEPT while the clone is on disk" \
+    "$(grep -q '^/myapp/$' "$root/.gitignore" && echo 1 || echo 0)" \
+    "removing it would re-arm the gitlink; it goes when the directory goes"
   check "${pfx}the user's code was NOT deleted" \
     "$([[ -f "$root/myapp/app.py" ]] && echo 1 || echo 0)" \
     "removing a squad is reversible; deleting a working tree is not"
-  python3 "$VERIFY" removed myapp --root "$root" >/dev/null 2>&1
+  python3 "$VERIFY" removed myapp --root "$root" --code-before present >/dev/null 2>&1
   check "${pfx}verify_project agrees the project is removed" \
     "$([[ $? -eq 0 ]] && echo 1 || echo 0)"
   rm -rf "$root" "$before"
@@ -187,7 +187,7 @@ p = sys.argv[1]; s = open(p, encoding="utf-8").read()
 open(p, "w", encoding="utf-8").write(s.replace('"pair": "portal_frontend"', '"pair": "myapp_a"', 1))
 PY
   remove_surgical "$root" myapp
-  local out; out="$(python3 "$VERIFY" removed myapp --root "$root" 2>&1)"; local rc=$?
+  local out; out="$(python3 "$VERIFY" removed myapp --root "$root" --code-before present 2>&1)"; local rc=$?
   check "${pfx}a dangling pair is caught" \
     "$([[ $rc -eq 1 ]] && grep -q 'dangling references' <<<"$out" && echo 1 || echo 0)" "exit=$rc"
   check "${pfx}and it names both ids" \

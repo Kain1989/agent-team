@@ -3,7 +3,7 @@
 nothing behind.
 
     python3 standup/control/verify_project.py added   <name> [--root DIR]
-    python3 standup/control/verify_project.py removed <name> [--root DIR]
+    python3 standup/control/verify_project.py removed <name> [--root DIR] --code-before present|absent
 
 WHY THIS IS A PROGRAM AND NOT A PARAGRAPH IN THE SKILL.
 
@@ -175,7 +175,7 @@ def check_added(root, name, results):
         _ok(results, "no embedded repo is staged as a gitlink")
 
 
-def check_removed(root, name, results):
+def check_removed(root, name, results, code_before=None):
     roster, _ = load_roster(root)
 
     if any(t.get("id") == name for t in roster.get("teams", [])):
@@ -184,11 +184,30 @@ def check_removed(root, name, results):
     else:
         _ok(results, "the squad is gone from the roster")
 
+    # The .gitignore line is NOT unconditionally garbage after removal. It exists to stop
+    # `git add -A` recording the clone as a gitlink, and /remove-project deliberately leaves the
+    # clone on disk — so deleting the line while the directory remains does not tidy anything, it
+    # RE-ARMS the exact hazard /add-project was built to prevent, silently, on the next `git add`.
+    # Measured in the user walkthrough: after removal, `git add -A --dry-run` printed
+    # "warning: adding embedded git repository: my-app".
+    #
+    # So the invariant is conditional on the directory, not on the roster.
     want = "/%s/" % name
-    if want in gitignore_lines(root):
-        _fail(results, "the .gitignore line is gone", "%r is still there" % want)
+    present = want in gitignore_lines(root)
+    here = os.path.isdir(os.path.join(root, name))
+    if here and not present:
+        _fail(results, "the gitignore entry matches reality",
+              "%s is still on disk but %r was removed from .gitignore — the next `git add -A` "
+              "records it as a gitlink. Put the line back until the directory is gone." 
+              % (os.path.join(root, name), want))
+    elif here:
+        _ok(results, "the gitignore entry matches reality",
+            "kept: the clone is still on disk, so the ignore is still doing work")
+    elif present:
+        _fail(results, "the gitignore entry matches reality",
+              "%r is a dead entry — %s is gone" % (want, name))
     else:
-        _ok(results, "the .gitignore line is gone")
+        _ok(results, "the gitignore entry matches reality", "removed with the directory")
 
     # Dangling references. These are why /remove-project reports before it edits.
     dangling = []
@@ -207,12 +226,32 @@ def check_removed(root, name, results):
     else:
         _ok(results, "no dangling references to the removed squad")
 
-    # The code itself must NOT have been deleted. Removing a squad is reversible; deleting a
-    # working tree is not, so a command that did it would be exceeding its remit.
-    if os.path.isdir(os.path.join(root, name)):
+    # The code itself must NOT have been deleted. Removing a squad is reversible; deleting a working
+    # tree is not, so a command that did it would be exceeding its remit — and "never deletes your
+    # repository" is stated in the skill frontmatter, the README table, the CHANGELOG and the commit
+    # message.
+    #
+    # Both branches of this used to call _ok, including the one where the directory was GONE. So the
+    # single check standing behind that four-times-repeated promise printed `ok` at the exact moment
+    # the promise was broken. It read like verification and could not fail.
+    #
+    # It needs a fact it cannot get after the fact: whether the directory was there BEFORE the edit.
+    # `--code-before` carries it. Without it the honest answer is "not checked" — never `ok`.
+    here = os.path.isdir(os.path.join(root, name))
+    if code_before == "present" and not here:
+        _fail(results, "the user's code was left alone",
+              "%s was there before and is GONE. /remove-project must never delete a repository — "
+              "it is a roster edit. Recover it from your remote, or from the reflog if it was "
+              "never pushed." % os.path.join(root, name))
+    elif code_before == "present":
         _ok(results, "the user's code was left alone", os.path.join(root, name))
+    elif code_before == "absent":
+        _ok(results, "the user's code was left alone",
+            "(nothing was there before this ran — nothing to keep)")
     else:
-        _ok(results, "the user's code was left alone", "(directory already absent — nothing to keep)")
+        _fail(results, "the user's code was left alone",
+              "NOT CHECKED — pass --code-before present|absent, recorded BEFORE the edits. "
+              "Without it this check cannot fail, and a check that cannot fail is not one.")
 
 
 def main():
@@ -220,11 +259,17 @@ def main():
     ap.add_argument("mode", choices=("added", "removed"))
     ap.add_argument("name")
     ap.add_argument("--root", default=".")
+    ap.add_argument("--code-before", choices=("present", "absent"), default=None,
+                    help="whether <name>/ existed BEFORE the removal — recorded by the caller, "
+                         "because after the fact it is unknowable")
     args = ap.parse_args()
 
     root = os.path.abspath(args.root)
     results = []
-    (check_added if args.mode == "added" else check_removed)(root, args.name, results)
+    if args.mode == "added":
+        check_added(root, args.name, results)
+    else:
+        check_removed(root, args.name, results, args.code_before)
 
     bad = [r for r in results if not r[0]]
     print("verify_project %s %r — %d check(s), %d failed"

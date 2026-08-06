@@ -36,15 +36,30 @@ a half-added project is worse than none, because the next command sees a directo
 
 ## Step 1 — clone
 
-Resolve `ROOT` = the directory holding `standup/team.json` (this project root). Then:
+Resolve `ROOT` = the directory holding `standup/team.json` (this project root). Then, **in this
+order** — the existence test comes FIRST, and it is not optional:
 
 ```
+[ -e "$ROOT/<name>" ] && { echo "refusing: $ROOT/<name> already exists"; exit 1; }
 git -C "$ROOT" clone <git-url> <name>
 ```
 
-**If the clone fails, stop.** Report git's own error verbatim — not a paraphrase — and change
-nothing else. Refuse if `<ROOT>/<name>` already exists: name the existing path and suggest a
-different `name`, or `/remove-project <name>` first if it was a previous attempt.
+Git is **not** a backstop for the collision case: cloning into an existing EMPTY directory
+succeeds (exit 0), so you would silently adopt whatever was there. And when it does refuse, it
+says `fatal: destination path 'x' already exists and is not an empty directory` — which names
+neither `name`'s double role (it is the directory AND the squad id) nor the way out. Refuse first,
+and say:
+
+```
+refusing: <ROOT>/<name> already exists — nothing was changed.
+  field  the squad id and the directory name are the SAME string
+  fix    pick another:  /add-project <git-url> <name>2 --kind <K> --inspect "<CMD>"
+         or, if a previous attempt left it:  /remove-project <name>
+         then remove the directory yourself:  rm -rf "<ROOT>/<name>"
+```
+
+**If the clone itself fails, stop.** Report git's own error verbatim — not a paraphrase — and
+change nothing else.
 
 Confirm the clone has an `origin` remote (`git -C "$ROOT/<name>" remote -v`). The gated SDLC commits
 to feature branches and never pushes, but the portal's worktree flow resolves `origin/<default>`,
@@ -105,22 +120,52 @@ fetch. Verified behaviour, not a precaution.
 
 ## Step 5 — tell them what is now true
 
-```
-Added <name>.
-  repo      <ROOT>/<name>   (origin: <url>)
-  squad     <name> — developers <name>_a, <name>_b
-  surface   <kind> — inspect: <CMD>
-  ignored   /<name>/ added to .gitignore
+**Put the required next step FIRST**, then the summary. A four-line success block followed by a
+paragraph of caveats reads as "done" and the last line gets skipped — which is exactly how
+`/sync-roster` gets missed.
 
-Next:
-  /sync-roster      regenerate the native-team agent defs (REQUIRED — the two new
-                    developers do not exist as agent types until you run it)
-  /work <task>      run one task through the gated SDLC against <name>
-  /standup          run the whole roster
+**Substitute every `<…>`.** Print the resolved absolute path and the real origin URL; a literal
+`<ROOT>/<name>` on screen means the one line whose whole job is telling the user where their code
+went has not done it.
+
+Use the SAME command prefix the user typed: `/sync-roster` in a checkout, `/agent-team:sync-roster`
+when the plugin is installed. Alternating between the two guarantees one of them is dead in
+whichever install they have.
+
+```
+NEXT — required:  /sync-roster
+       The two new developers do not exist as agent types until you run it, so /team
+       cannot spawn them.
+
+Added my-app
+  repo     /Users/you/agent-team/my-app  (origin: git@github.com:you/my-app.git)
+  squad    my-app — developers my_app_a, my_app_b
+  surface  cli — inspect: cd my-app && pytest -q
+  ignored  /my-app/ added to .gitignore
+
+Then:  /work "<task>"   one task through the gated SDLC
+       /standup         the whole roster
 ```
 
-`/sync-roster` is not a nicety: `/team` spawns teammates from `.claude/agents/*.md`, which are
-generated from the roster. Skip it and the new developers cannot be spawned.
+Keep the summary to those lines. The rules above (why `inspect` must terminate, why an invented one
+is worse than `none`) belong in this document, not repeated in every run's output — a reader who
+has to skim to find the actionable line will skim past it.
+
+## Step 6 — verify, with the checker, not by eye
+
+```
+python3 standup/control/verify_project.py added "<name>" --root "$ROOT"
+```
+
+**Run it. Do not skip it and do not summarise it.** If it exits non-zero, print its FAIL lines
+**verbatim** and say plainly what was and was not changed — the clone landed, the roster entry may
+have, and the user needs to know which.
+
+This step is the whole reason the four invariants are enforceable at all. The `.gitignore` one in
+particular cannot be checked by reading: it is `git ls-files -s` looking for mode `160000`, and a
+checklist in a prompt cannot run that. A gate promised in a document and backed by nothing is the
+failure this project has already recorded once, when `/work` was referenced by three governance
+files and did not exist.
 
 ## Failure contract
 
@@ -128,3 +173,7 @@ Every refusal names **the field in `standup/team.json`** it is about and **one c
 it** — the same contract the engine's own `STOP —` blocks follow. "Something went wrong" is not a
 report. If you changed nothing, say that too: the reader's next question is always whether they
 need to clean something up.
+
+**Keep refusals to those three things** — what is wrong, the field, the fix. They are already the
+strongest output this command produces; padding them with the reasoning behind the rule is what
+turns a three-line answer into twenty-five lines of prose that gets skimmed.
