@@ -316,6 +316,38 @@ async function runCases(src) {
     check('the error carries the offending text so it is fixable', /Near the error/.test(msg));
   }
 
+  // ═══ C4. A roster that cannot dispatch anyone STOPS — it never produces an empty board ═══
+  // There used to be a hardcoded EMBEDDED_ROSTER here, used whenever args.roster was absent or
+  // unparseable, so a run handed no roster quietly worked a DIFFERENT team and reported green.
+  // Deleting it exposed a second shape: `{}`, `{teams:[],staff:[]}` and an all-`active:false`
+  // roster produced BYTE-IDENTICAL output, because the squad filter collapses "nobody active" and
+  // "no squads" into one state. All three ran every phase including Arm — which writes the
+  // supervisor-gate exemption into the user's project and switches the gate off for six hours —
+  // and then printed `TICK DONE — 0 task(s)`, which reads like success.
+  section('C4. An undispatchable roster stops before any phase');
+  {
+    const { hooks } = host(() => undefined);
+    const stopOf = async (args) => {
+      try { await makeRunner(src, hooks)(args); return ''; }
+      catch (e) { return String(e.message); }
+    };
+    const noRoster   = await stopOf({ date: 'D', work: true, maxTasks: 1 });
+    const emptyObj   = await stopOf({ date: 'D', roster: {}, work: true, maxTasks: 1 });
+    const emptyTeams = await stopOf({ date: 'D', roster: { teams: [], staff: [] }, work: true, maxTasks: 1 });
+    const allOff = JSON.parse(JSON.stringify(roster));
+    allOff.teams.forEach(tm => (tm.developers || []).forEach(d => { d.active = false; }));
+    const inactive   = await stopOf({ date: 'D', roster: allOff, work: true, maxTasks: 1 });
+
+    check('a missing roster stops the run', /STOP — no usable roster/.test(noRoster), noRoster.slice(0, 70));
+    check('and it never reaches an agent', !/SENTINEL/.test(noRoster));
+    check('an empty roster object stops the run', /no ACTIVE developer/.test(emptyObj), emptyObj.slice(0, 70));
+    check('an explicitly empty teams list stops the run', /no ACTIVE developer/.test(emptyTeams));
+    check('an ALL-INACTIVE roster stops too (same state, not a different one)',
+      /no ACTIVE developer/.test(inactive), inactive.slice(0, 70));
+    check('the stop names the command that fixes it', /add-project/.test(emptyObj), emptyObj.slice(0, 90));
+    check('Arm never runs on a roster that cannot dispatch', !/team_run_active/.test(emptyObj));
+  }
+
   // ═══ D. Routing is a gate, not a guess ═══
   // Asserting "zero agent calls" would only be satisfiable on the single-task path — the default
   // path has already spent agents on Standup/Design/Synthesize before the queue exists. The
@@ -629,9 +661,29 @@ const FIXTURES = [
     to:   `    if (!challenge || !challenge.approved) { record.status = 'escalated-plan-rejected'` },
   { name: 'args-parse-failure-silently-nulled',
     why: 'unparseable args go back to A = null — one task silently becomes a whole-roster poll that cannot produce code, and nothing errors',
-    must_red: ['an UNPARSEABLE args string throws', 'it never falls through into the standup shape'],
+    // 'it never falls through into the standup shape' used to belong here and no longer can: with
+    // the embedded-roster fallback deleted, a nulled `args` reaches the roster guard and stops
+    // there instead. The invariant still holds — it is now defended twice — so asserting it as a
+    // tooth of THIS mutation would be asserting something the other gate guarantees. Group C4
+    // proves the second gate directly.
+    must_red: ['an UNPARSEABLE args string throws'],
     from: `  try { A = JSON.parse(A) }\n  catch (e) {`,
     to:   `  try { A = JSON.parse(A) }\n  catch (e) { A = null } if (false) {` },
+  // TWO fixtures, one per branch, deliberately. A single mutation of `if (ROSTER_ERROR)` reddened
+  // only the missing-roster case: the empty and all-inactive shapes are caught by the OTHER branch,
+  // which was still live. That is the same "a branch with no independent covering case" defect the
+  // eval judge shipped once, so each guard gets its own tooth.
+  { name: 'roster-missing-guard-neutralized',
+    why: 'a run handed no roster proceeds again — it used to silently work a hardcoded team instead of standup/team.json and report green',
+    must_red: ['a missing roster stops the run'],
+    from: `if (ROSTER_ERROR) {`,
+    to:   `if (false) {` },
+  { name: 'empty-roster-guard-neutralized',
+    why: 'an undispatchable roster runs every phase again — including Arm, which writes the exemption flag into the user project and switches the supervisor gate off for six hours — then prints TICK DONE with 0 tasks, which reads like success',
+    must_red: ['an empty roster object stops the run',
+               'an ALL-INACTIVE roster stops too (same state, not a different one)'],
+    from: `if (!DEVS.length) {`,
+    to:   `if (false) {` },
   { name: 'squad-inspect-blanked',
     why: 'a shipped squad declares a surface with no runnable inspect — the false promise one layer down',
     roster: (r) => { r.teams[0].review_surface.inspect = ''; return r; } },

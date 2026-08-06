@@ -26,7 +26,7 @@ For EACH case the plan marked `run`, in order:
    > relative to the process cwd, so a run whose `folder` is `demo-app` reviews the **real**
    > directory while the work happened in your copy — an empty diff, reported as `review-failed`.
    > Pointing `folder` at the copy does not work either: the engine hard-stops on a folder the
-   > assignee does not declare (`if (t.folder && !owned.includes(t.folder)) stopTick(...)`), and
+   > assignee does not declare (grep the engine for `!owned.includes(t.folder)`), and
    > `/tmp/eval-<id>` is in nobody's `also_owns`.
    > **Until that is fixed, prefer one of:**
    > (a) run the case on a throwaway *branch inside the real target* and reset afterwards —

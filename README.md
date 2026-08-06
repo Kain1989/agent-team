@@ -303,9 +303,10 @@ for `/standup`, with a Task-tool fallback. Windows is not currently supported. T
 model and the platform notes are in [`SECURITY.md`](SECURITY.md).
 
 - License [MIT](LICENSE) · changes [`CHANGELOG.md`](CHANGELOG.md)
-- CI runs the portal and demo-app suites, the workflow parse check, and every judge above —
-  each with its `--self-test` first — on pushes to `main` and on every pull request
-  (`.github/workflows/ci.yml`).
+- CI runs the portal and demo-app suites, the workflow parse check, and every judge above, on
+  pushes to `main` and on every pull request (`.github/workflows/ci.yml`). Each judge that takes
+  `--self-test` runs it first, except `verify_design_quality.js`, which CI runs **only** as
+  `--self-test` — proving it can still fail without needing a live URL in CI.
 
 ---
 

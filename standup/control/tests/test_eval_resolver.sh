@@ -25,6 +25,7 @@ RESOLVER="$REPO/evals/resolve_cases.py"
 
 fails=0
 FAILED_NAMES=""
+NA_COUNT=0
 check() { # name ok detail
   local name="$1" ok="$2" detail="${3:-}"
   if [[ "$ok" != "1" ]]; then
@@ -149,6 +150,7 @@ sys.exit(0 if all(c.get("requires") for c in cases) else 1)
 PYEOF
   shipped_rc=$?
   if [[ $shipped_rc -eq 2 ]]; then
+    NA_COUNT=$((NA_COUNT + 1))
     printf '  %s → n/a   the shipped gold-set has no cases; nothing to assert (this is NOT a pass)\n' \
       "${pfx}every shipped case declares \`requires\`"
   else
@@ -222,7 +224,13 @@ main() {
   }
   printf 'eval-target resolver judge — fixtures only; the repo tree is read, never written\n'
   run_cases "$RESOLVER"
-  printf '\n%s\n' "$([[ $fails -eq 0 ]] && echo "all checks PASS" || echo "$fails check(s) FAILED")"
+  # The summary must not read "all checks PASS" when a group asserted nothing. An n/a is neither a
+  # pass nor a failure, and folding it into the pass line is how a vacuous run looks complete.
+  local summary
+  if [[ $fails -ne 0 ]]; then summary="$fails check(s) FAILED"
+  elif [[ ${NA_COUNT:-0} -gt 0 ]]; then summary="checks PASS, but ${NA_COUNT} asserted nothing (see n/a above)"
+  else summary="all checks PASS"; fi
+  printf '\n%s\n' "$summary"
   printf 'Run --self-test to prove cases B/C can fail (E-03).\n'
   [[ $fails -eq 0 ]] || exit 1
 }

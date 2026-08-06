@@ -226,17 +226,30 @@ ADVISORY_HINT = re.compile(r"git\s+-C\s+[\"']?\$?\{?[A-Za-z_]*demo-app|demo-app.
 # paraphrase always is.
 #
 # Suppression is limited to PASSING sites on purpose: near a FAILING one the surrounding evidence
-# is exactly what a reader needs.
+# is exactly what a reader needs. The window is +/-6 lines in BOTH directions, not only below.
 #
-# RESIDUAL GAP, stated rather than papered over: a paraphrase written AS a bare `git -C demo-app`
-# command directly under a passing site is still suppressed. The classifier does not read
-# paraphrases at all (see the header) — this narrows the blind spot, it does not remove it.
+# Since the rule became structural, ADVISORY_NEAR no longer decides whether a paraphrase is seen —
+# prose surfaces at any radius, verified up to 999. It now only trims how much of a judged
+# the command block belonging to a judged instruction is echoed back. 6 is not a tuned value.
+#
+# NOTE the same parity rule as backticks applies to APOSTROPHES in these comments: bash scans
+# single quotes inside the enclosing command substitution too, so a lone one here breaks the
+# judge exactly as a lone backtick does. This paragraph is written without any.
+#
+# TWO RESIDUAL GAPS, stated rather than papered over. (1) A paraphrase written AS a bare
+# `git -C demo-app` command inside the window of a passing site is still suppressed. (2)
+# ADVISORY_CMD anchors on the command word, so a documentation-style prompt prefix such as
+# `$ git -C demo-app init` is NOT recognised as a command body and surfaces as advisory noise —
+# noise rather than blindness, but worth knowing before someone tunes it. The classifier does not
+# read paraphrases at all (see the header): this narrows the blind spot, it does not remove it.
 ADVISORY_NEAR = 6
-# NOTE \x60 (backtick) is written as an escape, never literally: this whole python block sits
-# inside a `$( ... )` command substitution, and bash scans that for backticks as legacy
-# command-substitution delimiters even though the heredoc is quoted. One literal backtick
-# here = "unexpected EOF while looking for matching" and the judge will not parse. Same
-# disease the workflow engine has with raw backticks in template literals.
+# BACKTICKS IN THIS BLOCK MUST BE PAIRED. This python block sits inside a `$( ... )` command
+# substitution, and bash scans that for backticks as legacy command-substitution delimiters even
+# though the heredoc is quoted — so an ODD number anywhere in here ends the substitution early and
+# the judge stops parsing entirely. Prose backticks are fine because they come in pairs; what is
+# not fine is a lone one, which is why the regex below spells it \x60. An earlier draft of this
+# comment told the reader never to write one literally while itself containing several: the rule
+# is parity, not abstinence. Same disease the engine has with backticks in template literals.
 ADVISORY_CMD = re.compile(r"^[\x60]{0,3}\s*(git|bash|sh)\s")
 advisory = []
 for base in instruction_paths + ["standup/standup.workflow.js", "setup.sh", "standup/team.json"]:
@@ -252,8 +265,7 @@ for base in instruction_paths + ["standup/standup.workflow.js", "setup.sh", "sta
             is_cmd_body = bool(ADVISORY_CMD.match(ln.strip()))
             if near_pass and (is_cmd_body or i in {q for (p, q) in classified if p == path}):
                 continue
-            if True:
-                advisory.append("%s:%d  %s" % (os.path.relpath(path, root), i, ln.strip()[:100]))
+            advisory.append("%s:%d  %s" % (os.path.relpath(path, root), i, ln.strip()[:100]))
 
 print("#ADVISORY %d" % len(advisory))
 for a in advisory:

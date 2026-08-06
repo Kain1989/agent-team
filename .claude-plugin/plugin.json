@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "agent-team",
   "displayName": "Agent Team",
-  "version": "0.3.9",
+  "version": "0.3.10",
   "description": "Run and manage a paired-squad AI engineering team from Claude Code: a gated SDLC (plan -> challenge -> implement -> test -> review -> commit), a local Mission Control portal, roster management, recurring standups, and a human approval gate.",
   "author": {
     "name": "Kain",
