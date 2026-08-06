@@ -3,10 +3,112 @@
 All notable changes to the **agent-team** plugin. Format: [Keep a Changelog](https://keepachangelog.com/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.10] — 2026-08-06
+
+**Four engine defects that all had the same shape: the apparatus was pointed at the wrong thing and
+did not error.**
+
+> **RELEASE CONSTRAINT — ship this together with the `/add-project` release, never alone.** The
+> empty-roster stop tells the reader `add a project with /add-project <git-url>`, and that command
+> ships in the sibling change, not this one. On its own this version would recommend a command it
+> does not provide, and `test_sdlc_routing.js` pins the string (`the stop names the command that
+> fixes it`) — so the false promise is held in place by a judge. An error message that names a
+> nonexistent command is worse than one that offers no suggestion: it costs the reader a search
+> before they learn there was nothing to find. If this ever has to be reverted alone, that string
+> must be changed in the same commit.
+
+### The problem this solves
+
+- **A run handed no roster worked a different team and reported green.** `EMBEDDED_ROSTER` was a
+  hardcoded copy used whenever `args.roster` was absent, falsy, or an unparseable string. Measured
+  on five inputs — key absent, `undefined`, `''`, `{}`, a truncated JSON string — every one produced
+  a full, clean-looking tick. The asymmetry that made it obvious once seen: three lines above,
+  an unparseable `args` **string** already threw; an unparseable `args.roster` string was caught and
+  swallowed.
+- **An undispatchable roster ran the whole tick.** `{}`, `{teams:[],staff:[]}` and an
+  all-`active:false` roster produce byte-identical output, because the squad filter collapses
+  "nobody active" and "no squads" into one state. All three ran every phase **including Arm** —
+  which writes the supervisor-gate exemption into the user's project and switches the gate off for
+  six hours — then printed `TICK DONE — 0 task(s)`, which reads like success. A first `/standup` on
+  a fresh install did exactly that.
+- **Arm could write the flag into a neighbouring install.** It located its helper by RELATIVE path
+  from an inherited cwd. On a machine with two agent-team trees that resolved into the neighbour,
+  whose helper truthfully reported `team_run_active PRESENT` — about the wrong repo. Where no such
+  tree existed, the `mkdir -p` fallback CREATED the missing directory and the verification (`ls` on
+  a path `mkdir -p` had just guaranteed) confirmed it. A check that could not fail.
+- **`RULEBOOK_PATHS` had the same bug, one function away, already firing.** From the host checkout
+  it read the host's `DESIGN_RULEBOOK.md` (has `B-12`, no `F-01`); from the plugin, the plugin's
+  (has `F-01`, no `B-12`) — and both reported the identical `rulebook_source: "DESIGN_RULEBOOK.md"`.
+  Read the wrong one and this plugin's own `F-01..F-07` are rejected by `E-01` as rules that do not
+  exist, while a neighbour's `B-12` becomes citable.
+
+### What changed
+
+- **No embedded roster.** Missing, non-object, or unparseable `args.roster` stops the run. Both that
+  and the empty-roster case route through one `stopTick`, placed immediately after `stopTick` exists
+  and before any phase — not earlier, because `stopTick` is a `const` and reaching it from the
+  resolution site is a TDZ `ReferenceError`. The stop names `/add-project`.
+- **Arm resolves an absolute root and the ENGINE asserts identity.** The agent walks up for an
+  anchor (`standup/team.json` + `standup.workflow.js`, nearest wins), arms via the absolute path,
+  and verifies against `team_run_active PRESENT` — a string `mkdir` cannot fabricate. It then
+  reports the tree's team/dev ids, and the engine compares them with the roster it holds in memory.
+  That comparison is the load-bearing half: a neighbour's helper is not lying when it says PRESENT,
+  so **no check the writer performs on itself can catch this** — it needs a fact the writer never
+  had. Mismatch throws; a sorted id projection is compared, never a deep equality. Teardown reuses
+  the verified root, or refuses and lets the 6h TTL do its job.
+- **The `mkdir -p` fallback is deleted.** A file written where the gate does not read is worse than
+  no file, because it reports success.
+- **`rulebook_source` is now the resolved absolute path plus the id count**, and a candidate is
+  accepted only once shown to belong to this install. Unverifiable is **rejected**, not
+  accepted-with-a-note: the neighbouring tree has no `F-*` family, so accepting it makes every
+  `F-01` citation an unknown rule — the same damage with a footnote.
+
+### Filesystem access, and why it stopped mattering
+
+This engine says elsewhere that workflow scripts have no filesystem access, and `RULE_IDS_SOURCE`
+only ever entered the return object without being logged — so across 27 recorded runs there is **no
+evidence either way**. Rather than spend a real run finding out, both paths were made correct: Arm
+needs no `fs` at all (the agent's bash does the resolving), and the rulebook read treats no-`fs` as
+a **degrade** — embedded ids, and the source says so plainly — never a stop. Failing every
+code-writing run over a design-rule id list would trade a silent bug for an outage.
+
+### What the identity assertion does and does not cover
+
+Stated because the first draft of this claim was **backwards**. Resolution and identity cover
+**disjoint** sets, not two layers of one defence:
+
+- **resolution** (walk up for two anchor files) kills the **case-folding hijack** — the one actually
+  observed, where `standup/` resolved into a differently-cased sibling;
+- **identity** (compare the armed tree's ids against the roster in memory) catches a
+  **cross-project decoy**, a neighbour whose roster differs;
+- **neither catches a TWIN** — two checkouts of the same repo. Identical rosters, so identity
+  agrees; a valid anchor, so resolution accepts. The run arms the wrong tree and logs `verified`.
+  That is the most likely two-tree layout for a published plugin: a marketplace install beside a
+  git clone of the same project.
+
+Closing the twin case needs a **run-scoped** fact — a nonce the engine writes and reads back, or the
+realpath+size of the running `standup.workflow.js`. Deliberately not built here, and recorded as a
+known gap rather than left implied.
+
+### Judges
+
+`standup/control/tests/test_arm_path.sh` (new) and `C4`/`C5` groups in `test_sdlc_routing.js`
+(111 cases). The arm judge builds its decoy as a real lowercase `standup/` directory rather than
+relying on macOS case-folding: CI is `ubuntu-latest` and case-sensitive, so a `STANDUP/` decoy would
+never resolve there, "the decoy is untouched" would be vacuously true, and the `E-03` mutation would
+stay green on the only machine that runs it automatically.
+
+Both new mutations are split **one per branch**. A single fixture neutralising `if (ROSTER_ERROR)`
+reddened only the missing-roster case, because the empty and all-inactive shapes are caught by the
+other branch — the same "a branch with no independent covering case" defect the eval judge shipped
+once. Writing the arm judge reproduced another house speciality: `status | grep -q` made `grep` exit
+first, the writer took `SIGPIPE`, and `pipefail` turned a correct arm into a silent false.
+
 ## [0.3.9] — 2026-08-06
 
-**Deleting the sample — which the docs invite — broke the installer, five documents, and the eval
-suite. Found from questions two external teams raised after trying the plugin.**
+**Deleting the sample — which the docs invite — broke the installer, the documents that tell you
+how to run it, and the eval suite. Found from questions two external teams raised after trying the
+plugin.**
 
 ### The problem this solves
 
@@ -64,7 +166,7 @@ isolation its own recipe describes does not survive contact with the engine. In
 read). `git -C` resolves against the process cwd, so the reviewer reads the *real* target while the
 work happened in the copy: an empty diff, reported as `review-failed`. Re-pointing `folder` at the
 copy is refused by the ownership check that stops on a folder the assignee does not declare
-(`if (t.folder && !owned.includes(t.folder)) stopTick(...)`). `skills/eval/SKILL.md` carries this
+(grep the engine for `!owned.includes(t.folder)`). `skills/eval/SKILL.md` carries this
 warning inline with the two workarounds. Do not read a `review-failed` from an eval as a quality
 regression without checking which directory was read.
 
@@ -88,7 +190,7 @@ read as green — the same disease they were written to catch, one level up:
 - it knew exactly one sentence shape, so `/portal` telling users to target `project:demo-app`
   unconditionally was invisible to it — the pair this release's own note promised to keep in sync;
 - the setup judge's window stopped at the section-6 marker, excluding a guard **this release
-  added** twelve lines later, and passed all-green over code it could not see;
+  added** seven lines past it, and passed all-green over code it could not see;
 - the eval judge had no fixture where `requires` differed from `target`, so that entire branch
   could be deleted with every check still green;
 - and its self-test reported PASS off an unrelated failure while the mutation quietly no-opped.
