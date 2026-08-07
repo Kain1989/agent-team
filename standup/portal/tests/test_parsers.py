@@ -21,22 +21,60 @@ REAL_STANDUP_ROOT = Path(__file__).resolve().parents[2]
 # --------------------------------------------------------------------------- #
 # team.json
 # --------------------------------------------------------------------------- #
-def test_team_roster_ships_with_no_squads_and_keeps_staff():
+def test_team_roster_keeps_staff_whatever_the_user_added():
+    """The LIVE roster: staff survive, whatever ``teams`` happens to be.
+
+    This deliberately asserts NOTHING about the CONTENT of ``squads``. It used to
+    assert ``t["squads"] == []`` against the live file — so anyone who followed the
+    README and ran ``/add-team portal`` + ``/add-role`` twice (the documented way to
+    get a squad for the one product this repo ships) turned the factory suite RED by
+    doing what the docs told them to.
+
+    "No project squad SHIPS" is still a fact worth guarding, but it is a fact about
+    what this repo DISTRIBUTES, not about whatever roster is on a user's disk. It is
+    judged by ``standup/control/tests/test_release_invariants.sh`` (group C), against
+    the COMMITTED roster rather than the working tree. The parser behaviour the old
+    equality was incidentally covering — an empty ``teams`` still yields staff — is
+    covered by its own fixture test below, where it does not depend on live state.
+
+    The staff assertions below stay live-coupled on purpose and are safe to: they are
+    SUPERSET checks, and every roster command (``/add-team``, ``/add-role``) only ever
+    grows the set. Nothing ships that removes a staff role.
+    """
     t = team.parse()
     assert t["_ok"] is True
-    # The shipped roster has NO project squad, deliberately: a fresh install has nothing to work on
-    # until /add-project creates it, and /standup stops with that instruction rather than polling an
-    # empty board. This asserts the shipped SHAPE; parser behaviour on a populated roster is covered
-    # by the fixture-based tests below.
-    assert t["squads"] == []
-    # staff survive an empty roster — they are lenses, not squads
-    assert {s["id"] for s in t["staff"]} >= {"pm_agent", "design_lead"}
-    # staff includes the pm + design + comms leads (comms_triage is inactive in
-    # the MVP but still listed in the roster).
+    # staff are lenses, not squads: the pm, design, QA and comms leads are all present
+    # (comms_triage is inactive in the MVP but still listed in the roster).
     staff_ids = {s["id"] for s in t["staff"]}
-    assert {"comms_triage", "pm_agent", "design_lead"} <= staff_ids
-    # bench is empty in the MVP (the parent's bench cast was dropped).
+    assert {"comms_triage", "pm_agent", "design_lead", "product_qa"} <= staff_ids
+    # shape only — the UI iterates both without a guard
+    assert isinstance(t["squads"], list)
     assert isinstance(t["bench"], list)
+
+
+def test_empty_teams_roster_keeps_staff_as_lenses(tmp_path, monkeypatch):
+    """Parser behaviour on a FIXTURE roster with ``teams: []``.
+
+    A fresh install has no project until ``/add-project`` creates one, so the parser
+    must report zero squads WITHOUT dropping the staff lenses (they are not attached
+    to a squad) and without failing ``_ok``. Driving this from a fixture keeps the
+    behaviour covered no matter what the reader's own roster looks like.
+    """
+    (tmp_path / "standup").mkdir()
+    (tmp_path / "standup" / "team.json").write_text(json.dumps({
+        "teams": [],
+        "staff": [
+            {"id": "pm_agent", "role": "Product Manager Agent", "active": True},
+            {"id": "design_lead", "role": "Design Lead", "active": True,
+             "scope_folders": ["standup/portal"]},
+        ],
+        "bench": []}), encoding="utf-8")
+    monkeypatch.setenv("STANDUP_ROOT", str(tmp_path / "standup"))
+    t = team.parse()
+    assert t["_ok"] is True
+    assert t["squads"] == []
+    assert {s["id"] for s in t["staff"]} == {"pm_agent", "design_lead"}
+    assert t["bench"] == []
 
 
 def test_active_dev_index_maps_folders(tmp_path, monkeypatch):
