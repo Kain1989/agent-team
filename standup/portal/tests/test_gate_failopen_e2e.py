@@ -110,17 +110,28 @@ def test_working_hook_actually_blocks(tmp_path):
 
 
 @pytest.mark.skipif(not CLAUDE, reason="claude binary not on PATH")
-def test_unlaunchable_hook_fails_open(tmp_path):
-    """THE PREMISE. A hook that cannot be exec'd blocks NOTHING and says NOTHING.
+@pytest.mark.parametrize("shape", ["missing_interpreter", "crashing_script"])
+def test_hook_that_does_not_complete_fails_open(tmp_path, shape):
+    """THE PREMISE. A hook that does not COMPLETE blocks nothing and says nothing.
+
+    Both shapes are checked because the premise is not "a missing interpreter fails
+    open" — it is the more general and more dangerous "a non-zero exit fails open".
+    `crashing_script` is the one a path-existence checker can never see: every path in
+    the config resolves, and the gate is still gone.
 
     Measured 2026-08-07 on Claude Code 2.1.222: written=True, denials=0, stderr empty.
 
     If this FAILS, upstream has changed and our fail-closed workaround may be
     relaxable — revisit gate_check.py's rationale rather than deleting this test.
     """
-    hook = tmp_path / "deny.py"
-    hook.write_text("import sys; sys.stdin.read()\n", encoding="utf-8")
-    written, denials = _run_with_gate(tmp_path, f"{DEAD_INTERPRETER} {hook}", "broken")
+    hook = tmp_path / "hook.py"
+    if shape == "missing_interpreter":
+        hook.write_text("import sys; sys.stdin.read()\n", encoding="utf-8")
+        command = f"{DEAD_INTERPRETER} {hook}"
+    else:
+        hook.write_text("raise ImportError('simulated bad edit')\n", encoding="utf-8")
+        command = f"{sys.executable} {hook}"
+    written, denials = _run_with_gate(tmp_path, command, shape)
 
     if not written and denials == 0:
         pytest.skip("inconclusive: the model declined on its own, tool never attempted "

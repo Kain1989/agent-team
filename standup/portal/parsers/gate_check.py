@@ -48,6 +48,7 @@ import json
 import os
 import shlex
 import shutil
+import subprocess
 from typing import List, Union
 
 PathLike = Union[str, "os.PathLike[str]"]
@@ -61,8 +62,96 @@ class GateConfigError(Exception):
     """
 
 
+# A side-effect-free PreToolUse event used to prove the hook actually RUNS. The tool
+# name is deliberately one no allow-list contains, so a deny-by-default gate answers
+# "deny" without touching anything, and `tool_input` is empty so no path is implied.
+_SMOKE_EVENT = json.dumps({
+    "hook_event_name": "PreToolUse",
+    "tool_name": "__gate_smoke_probe__",
+    "tool_input": {},
+})
+_SMOKE_TIMEOUT_S = 10.0
+_VALID_DECISIONS = frozenset({"allow", "deny", "ask"})
+
+# Bound at import, deliberately. The smoke run must not be interceptable by anything that
+# later rebinds subprocess.run — a stub installed for another purpose would otherwise
+# answer on the hook's behalf and certify a gate nobody executed. (This is not
+# hypothetical: the existing agent_run tests patch subprocess.run globally to capture the
+# launch argv, and that silently swallowed the smoke probe until this was pinned.)
+_RUN = subprocess.run
+
+
+def _smoke_problem(command: str) -> str:
+    """Run the hook on a synthetic event; return why it is unusable, else "".
+
+    THIS is the check that matters, and the one a path test cannot make. Verifying the
+    interpreter exists proves a *string* resolves; it does not prove the hook RUNS. Two
+    configurations pass every static check and still fail open:
+
+      * the hook script exists and the interpreter exists, but the script CRASHES (a bad
+        edit, a deleted import) -> exit 1;
+      * `/usr/bin/python3` on macOS is a Command Line Tools SHIM. With CLT absent — an
+        ordinary consequence of an OS upgrade — the file still exists and is still
+        executable (`isfile` OK, `X_OK` OK) but every invocation exits non-zero with
+        `xcrun: error: invalid active developer path`.
+
+    Both leave the gate wide open while a static checker reports it healthy, and a dead
+    boundary showing a green light is worse than no check at all: without the check,
+    nobody believes it is closed.
+
+    So we require the hook to do its job on a probe: exit 0 AND return a parseable
+    permission decision. Exit 2 is accepted as well — that is Claude Code's documented
+    "block" convention, and a hook that blocks demonstrably ran. Anything else (any other
+    non-zero exit, a hang, exit 0 with unparseable output) means the boundary is not
+    answering, and an unverifiable boundary is treated as absent.
+    """
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        return ""  # already reported by _interpreter_problem
+    if not argv:
+        return ""
+    try:
+        proc = _RUN(
+            argv, input=_SMOKE_EVENT, capture_output=True, text=True,
+            timeout=_SMOKE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        return (
+            f"hook did not answer a probe event within {_SMOKE_TIMEOUT_S:g}s — a gate that "
+            f"hangs cannot be relied on to block: {command!r}"
+        )
+    except (OSError, ValueError) as exc:
+        return f"hook could not be executed ({exc}): {command!r}"
+
+    if proc.returncode == 2:
+        return ""  # documented "block" exit; the hook ran.
+    if proc.returncode != 0:
+        lines = [ln for ln in (proc.stderr or "").strip().splitlines() if ln.strip()]
+        tail = lines[-1][:160] if lines else "(no stderr)"
+        return (
+            f"hook EXITS {proc.returncode} on a probe event — Claude Code FAILS OPEN on a "
+            f"hook that does not run, so this gate would allow every tool while looking "
+            f"correctly configured (stderr: {tail!r}): {command!r}"
+        )
+    try:
+        decision = json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"]
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return (
+            f"hook exits 0 but returned no parseable permissionDecision, so it decides "
+            f"nothing (stdout: {(proc.stdout or '')[:120]!r}): {command!r}"
+        )
+    if decision not in _VALID_DECISIONS:
+        return f"hook returned an unrecognised permissionDecision {decision!r}: {command!r}"
+    return ""
+
+
 def _interpreter_problem(command: str) -> str:
-    """Return a problem string if `command`'s executable cannot be run, else ""."""
+    """Return a problem string if `command`'s executable cannot be run, else "".
+
+    A fast, precise pre-check: it names the exact broken path, which a smoke run can only
+    report as "exit 127". Necessary but NOT sufficient — see :func:`_smoke_problem`.
+    """
     try:
         argv = shlex.split(command)
     except ValueError as exc:  # unbalanced quotes
@@ -128,6 +217,7 @@ def gate_config_problems(path: PathLike) -> List[str]:
         )
 
     commands = 0
+    smoked: set = set()  # a config repeats one command across matchers; run it once
     for entry in pretool:
         if not isinstance(entry, dict):
             problems.append(f"PreToolUse entry is not an object: {entry!r}")
@@ -145,7 +235,15 @@ def gate_config_problems(path: PathLike) -> List[str]:
                 problems.append(f"hook has no command: {hook!r}")
                 continue
             commands += 1
-            bad = _interpreter_problem(command.strip())
+            command = command.strip()
+            if command in smoked:
+                continue
+            smoked.add(command)
+            bad = _interpreter_problem(command)
+            if bad:
+                problems.append(bad)
+                continue  # a path that does not resolve has nothing to smoke
+            bad = _smoke_problem(command)
             if bad:
                 problems.append(bad)
 
