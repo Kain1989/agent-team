@@ -29,8 +29,10 @@ INPUT: `$ARGUMENTS` — one of three modes:
   becomes unexpressible.)
 - anything starting `./`, `../` or `/` is a path, never a URL.
 - `^[A-Za-z]:` is excluded **before** the `scp`-like test — `C:\src\thing` is a Windows path, and
-  the `host:path` rule would otherwise read `C` as a host. The same trap catches `file:///…` and
-  `localhost:3000/x`.
+  the `host:path` rule would otherwise read `C` as a host. That rule matches ONLY a single-letter
+  drive prefix; `file:///…` and `localhost:3000/x` are handled elsewhere — `file://` by the
+  scheme test (it is a URL, and a URL naming a local path is still a clone source you must be
+  explicit about), `localhost:3000/x` by requiring a `user@` before `host:path`.
 - anything else with no mode word → **refuse** and print the three forms.
 
 Guessing a mode is how you clone into a directory the user meant to adopt. This repo's rule is
@@ -109,16 +111,29 @@ wrong), `git init`, `git add README.md`, commit.
 
 1. If it is already its own repo with commits, leave its contents and its `origin` completely
    alone. Skip to 1c.
-2. **Scan for secrets before committing anything.** Run the plugin's own scanner over the files
-   that would be committed:
-   `PYTHONPATH="$ROOT/standup/portal" python3 -c "from parsers import guardrails; ..."` — walking
-   the tree, skipping `.git`, `node_modules`, `.venv`, `__pycache__`. **Any hit → refuse**, listing
-   the offending files. An adopted folder is *more* likely to hold a `.env` than a clone is,
-   precisely because nobody has ever written it a `.gitignore`. (Measured: ~20,000 files/s, so a
-   3,600-file tree costs about 0.2s. This is not a slow path.)
-3. If the directory has no `.gitignore`, write one **derived from what is actually present** —
-   only lines for things you can see (`.env`, `node_modules/`, `.venv/`, `__pycache__/`). Do not
-   invent entries for a stack you are guessing at.
+2. **Ensure the dangerous paths are ignored — do not make this conditional on a `.gitignore`
+   existing.** For each of `.env`, `.env.*`, `*.pem`, `id_rsa`, `node_modules/`, `.venv/`,
+   `__pycache__/` that is actually present, make sure a matching line is in the directory's
+   `.gitignore`, appending to whatever is already there. Only lines for things you can see — do
+   not invent entries for a stack you are guessing at.
+
+   The earlier "if the directory has no `.gitignore`, write one" was the wrong condition: a stale
+   `*.pyc` from years ago skipped the whole step, and the baseline commit then contained `.env`.
+   Measured end to end.
+3. **Refuse on anything secret-shaped, by NAME first.** A filename test is the reliable signal
+   here: if `.env`, `.env.*`, `*.pem`, `id_rsa`, `id_dsa`, `*.p12`, `*.keystore` or
+   `credentials.json` would be committed, **refuse** and list them.
+
+   Then also run the plugin's scanner over the file contents
+   (`PYTHONPATH="$ROOT/standup/portal" python3 -c "from parsers import guardrails; …"`, walking the
+   tree, skipping `.git`, `node_modules`, `.venv`, `__pycache__`) and refuse on a hit.
+
+   **Content matching alone is not enough and must not be relied on.** Measured against the
+   scanner: `DB_PASSWORD=hunter2`, `API_KEY=abcdef123456`, `DATABASE_URL=postgres://u:s3cr3t@…`
+   and even `PASSWORD="hunter2"` are all MISSED; only prefixed tokens (`AKIA…`, `ghp_…`) are
+   caught. Unquoted `KEY=value` is the normal shape of a real dotenv file, which is exactly the
+   file an adopted folder is most likely to carry. The name test is what actually stops it.
+   (Speed is not the constraint: ~20,000 files/s, so a 3,600-file tree costs about 0.17s.)
 4. `git init` if needed, `git add -A`, commit.
 
 **Why a real baseline commit and not `git commit --allow-empty`.** An empty baseline leaves every
@@ -128,8 +143,11 @@ that has nothing to do with it. Measured: with an empty baseline a real edit pro
 tracked baseline the same edit produces a normal diff. The empty-baseline shortcut trades the
 secret problem for the exact defect this guarantee exists to prevent.
 
-**Author identity.** If git reports `Author identity unknown`, **refuse** and print the two
-`git config` lines. Do not invent one. The bundled sample is initialised with a
+**Author identity.** Check `git config user.email` **explicitly** before committing; if it is
+empty, **refuse** and print the two `git config` lines. Do not invent one, and do not rely on
+git's own error: git only says `Author identity unknown` when it cannot GUESS one, and on a machine
+with a resolvable FQDN it silently invents `user@host` and commits. The refusal would never fire
+where it matters most. The bundled sample is initialised with a
 `demo`/`demo@local` identity because it is a throwaway; attributing a commit in the user's own
 source to a fabricated author is a different decision, and not ours.
 
@@ -142,6 +160,14 @@ git init --bare "$ROOT/.<name>-origin.git"
 git -C "$ROOT/<name>" remote add origin "$ROOT/.<name>-origin.git"
 git -C "$ROOT/<name>" push -u origin HEAD
 ```
+
+Then **ignore it** — append `/.<name>-origin.git/` to the ROOT `.gitignore` in step 4, alongside
+`/<name>/`. A bare origin is neither covered by `/<name>/` nor a pointer entry; it is ordinary
+files, so an unignored one lets `git add -A` in the installation absorb the project's entire git
+object store. Measured: 23 staged paths, and a loose object that decompressed to
+`DB_PASSWORD=hunter2`. That is worse than the gitlink this command was built to prevent — a gitlink
+is a dangling pointer, this is the content itself, and it travels when the user pushes their own
+agent-team repo.
 
 Offline, no network, no account. **This is not optional and it is not cosmetic:** the portal's
 code-task flow — the approve-then-commit loop that is this plugin's headline feature — resolves
@@ -176,8 +202,10 @@ Not a preference. Measured, in the shape that actually occurs:
   installation's HEAD**, and `git add -A` stages unrelated in-flight work from elsewhere in the
   tree. Several sessions share this working tree; that is why the push job never auto-commits.
   A run against a non-repo project does not quietly produce nothing — it commits into your setup.
-- **`git -C` does not save you.** Outside any repo it exits 129, loudly. Inside a parent repo it
-  exits **0 with empty output** — the silent shape.
+- **`git -C` does not save you.** Outside any repo it is loud — `diff` exits **129** (it falls
+  through to `--no-index` usage), and `status`/`rev-parse`/`add`/`checkout` exit **128**. Inside a
+  parent repo the same `diff` exits **0 with empty output** — the silent shape. Measured on git
+  2.55.0; the number differs by subcommand, so do not restate one code for all of them.
 - **A repo with no commit is the same failure by another route.** Untracked files are invisible to
   `git diff`, so the review ring reads an empty diff no matter what changed.
 - **No origin disables the portal's code-task loop** (`worktree.py` resolves origin's default
@@ -244,7 +272,8 @@ say so loudly. A roster that does not parse stops every command in this plugin.
 
 ## Step 4 — `.gitignore`
 
-Append `/<name>/` to this project's `.gitignore`.
+Append `/<name>/` to this project's `.gitignore` — and `/.<name>-origin.git/` too if step 1c
+created a local bare origin.
 
 Not cosmetic: the cloned repo is a git repo **inside** this one, and without the ignore a
 `git add -A` here records it as a gitlink (mode `160000`) — a pointer to a commit nobody else can
@@ -273,11 +302,16 @@ Added my-app
   repo     /Users/you/agent-team/my-app  (origin: git@github.com:you/my-app.git)
   squad    my-app — developers my_app_a, my_app_b
   surface  cli — inspect: cd my-app && pytest -q
-  ignored  /my-app/ added to .gitignore
+  ignored  /my-app/ and /.my-app-origin.git/ added to .gitignore
+  wrote    my-app/.gitignore  (+.env, +node_modules/) — we found those in your project
 
 Then:  /work "<task>"   one task through the gated SDLC
        /standup         the whole roster
 ```
+
+**If you wrote or extended a `.gitignore` inside the user's project, say so on its own line and
+name the entries you added and why.** We put a file in their repository; they should learn that
+here, not from `git log`. That line is part of the summary, not an extra.
 
 Keep the summary to those lines. The rules above (why `inspect` must terminate, why an invented one
 is worse than `none`) belong in this document, not repeated in every run's output — a reader who

@@ -20,8 +20,8 @@ different part of the pipeline, and two of them break it *silently*:
   to the enclosing one. Measured: `checkout -b feature/task-1` moved the **outer** repo's HEAD, and
   `git add -A` staged unrelated in-flight work from elsewhere in the tree. Several sessions share
   that working tree — it is why the daily push job never auto-commits.
-- **`git -C` only warns when there is no repo at all** (exit 129). Inside a parent repo it exits
-  **0 with empty output**.
+- **`git -C` only warns when there is no repo at all** — `diff` exits 129 there, other porcelain
+  128. Inside a parent repo the same `diff` exits **0 with empty output**.
 - **A repo with an unborn HEAD is the same failure by another route.** Untracked files are
   invisible to `git diff`, so the review ring reads an empty diff whatever the developer changed.
 - **No `origin` disables the portal's code-task loop**, which is this plugin's headline feature —
@@ -64,7 +64,7 @@ different part of the pipeline, and two of them break it *silently*:
 
 Replaced outright, not supplemented:
 
-- a `git worktree` or submodule checkout has a `.git` **file** (measured: 98 bytes), so `isdir`
+- a `git worktree` or submodule checkout has a `.git` **file** (a path pointer), so `isdir`
   called a directory git handles perfectly "not a repo" — the likely shape of an adopted folder;
 - a **symlink** to a repo makes `os.path.isdir(link/.git)` return True, because Python follows it.
 
@@ -89,12 +89,38 @@ commits first proves nothing about the project.
   constants, never transcribed. The hand-written list in the plan already omitted `hooks/` and
   `skills/`.
 
+### The local bare origin has to be ignored too
+
+Creating `<root>/.<name>-origin.git` and ignoring only `/<name>/` leaves the bare origin as ordinary
+files — neither covered by that pattern nor a pointer entry. Measured on an installed shape: **23
+staged paths** under it, and a loose object that decompressed to `DB_PASSWORD=hunter2`. That is
+worse than the gitlink this command was built to prevent: a gitlink is a dangling pointer, this is
+the content, and it travels when the user pushes their own agent-team repo. The shipped `.gitignore`
+now carries a **pattern** (`.*-origin.git/`) rather than a hardcoded sample line, `/add-project`
+appends the specific entry too, and the checker fails on an unignored one.
+
+### `adopt` refuses secret-shaped files by NAME, because content matching does not see them
+
+The derived `.gitignore` was written only "if the directory has no `.gitignore`" — so one stale
+`*.pyc` skipped it and `.env` went into the baseline commit. And the scanner behind it does not
+catch what a real dotenv looks like: measured, `DB_PASSWORD=hunter2`, `API_KEY=abcdef123456`,
+`DATABASE_URL=postgres://u:s3cr3t@…` and even `PASSWORD="hunter2"` are all **missed** — only
+prefixed tokens (`AKIA…`, `ghp_…`) are caught.
+
+So: the ignore lines are ensured unconditionally, and the refusal leads with a **filename** test
+(`.env`, `.env.*`, `*.pem`, `id_rsa`, `*.p12`, `credentials.json`, …) with the content scan behind
+it. Running `check_output` on the staged diff was considered and rejected — it calls the same
+`scan_secrets` that missed all three lines, so it would have added a step without adding a signal.
+
 ### Judges
 
-`test_add_project.sh` grows to **18 checker branches**, each with an independent covering case and
+`test_add_project.sh` grows to **22 checker branches**, each with an independent covering case and
 its own `if False:` mutation — written in the same edit as the branch, not added after review.
-Its `--self-test` now runs the mutations **concurrently** (~24s instead of ~2 minutes); coverage is
-unchanged, each still executes the full suite and must redden its own named case.
+Its `--self-test` runs the mutations **concurrently** (~24s instead of ~2 minutes) with two gates
+that the serial version got for free and the parallel one did not: it **asserts every job reported
+back** (a subshell that dies before writing its verdict used to be invisible — measured: 17 verdicts
+printed, 18 claimed, exit 0), and it **requires the unmutated suite to be green first**, because
+"did this case go red" is meaningless for a case that was already red.
 
 Group D demonstrates rather than asserts: it drives git into the non-repo shape and shows the
 enclosing HEAD move and the unrelated file being staged, and it shows an `--allow-empty` baseline

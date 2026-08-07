@@ -111,19 +111,26 @@ def em_owned_names(root):
     in this repo is that restating a list loses the load-bearing part of it; the gate is the single
     source, so read the gate.
 
-    Falls back to an empty set if the gate cannot be parsed — the caller treats that as "cannot
-    check", never as "nothing is denied".
+    Returns None when the gate cannot be read or fully parsed. The caller reports that as NOT
+    CHECKED and FAILS — an absent protection reported as `ok` is the shape this file exists to stop,
+    and `check_removed` already takes that line for its own unreadable case.
     """
     gate = os.path.join(root, "hooks", "supervisor_gate.py")
-    names = set()
     try:
         src = open(gate, encoding="utf-8").read()
     except OSError:
-        return names
+        return None
+    names = set()
     for const in ("PLUGIN_DIRS", "STANDUP_ALLOW_DIRS", "STANDUP_ALLOW_FILES"):
         m = re.search(const + r"\s*=\s*\{([^}]*)\}", src)
-        if m:
-            names |= {x.strip().strip("\"'") for x in m.group(1).split(",") if x.strip()}
+        if not m:
+            # ALL THREE must parse. Matching two of three and continuing would silently shrink the
+            # deny list, and a shrunken deny list is indistinguishable from a satisfied one. If the
+            # gate is refactored (say `frozenset((...))`) this reports unreadable, not a guess.
+            return None
+        names |= {x.strip().strip("\"'") for x in m.group(1).split(",") if x.strip()}
+    # Seeded AFTER a successful parse, never before: seeding first makes the set non-empty and lets
+    # an unreadable gate masquerade as a parse that worked.
     names.add("standup")          # the engine root itself, named by the gate's own path logic
     return {n for n in names if n}
 
@@ -159,7 +166,7 @@ def repo_identity(dirpath):
 
     It also replaces `os.path.isdir(.git)` outright rather than sitting beside it, because that
     test is wrong in both directions:
-      * a `git worktree` or submodule checkout has a `.git` FILE (measured: 98 bytes), so isdir
+      * a `git worktree` or submodule checkout has a `.git` FILE (a path pointer, not a directory), so isdir
         says False about a directory git handles perfectly — the likely shape of an adopted folder;
       * a symlink to a repo makes `os.path.isdir(link/.git)` return True, because Python follows
         the link.
@@ -303,6 +310,24 @@ def check_added(root, name, results):
               "(mode 160000) — a pointer to a commit nobody else can fetch" % want)
     else:
         _ok(results, ".gitignore ignores the cloned repo", want)
+
+    # The local bare origin created for `new` / origin-less `adopt` lives at
+    # <root>/.<name>-origin.git and is NEITHER covered by `/<name>/` NOR a pointer entry — it is
+    # ordinary files. Measured: an install whose .gitignore had only `/myapp/` staged 23 paths under
+    # `.myapp-origin.git`, and a loose object there decompressed to `DB_PASSWORD=hunter2`. That is
+    # worse than the gitlink this file was written for: a gitlink is a dangling pointer, this is the
+    # content itself, and it travels when the user pushes their own agent-team repo.
+    origin_dir = ".%s-origin.git" % name
+    if os.path.isdir(os.path.join(root, origin_dir)):
+        rc_ign, _ = _git(root, "check-ignore", "-q", origin_dir)
+        if rc_ign != 0:
+            _fail(results, "the local bare origin is ignored",
+                  "%s exists but is NOT ignored — `git add -A` in this installation absorbs the "
+                  "project's git objects, secrets included, into its own history. Add "
+                  "`/%s/` to .gitignore (or the generic `.*-origin.git/`)."
+                  % (os.path.join(root, origin_dir), origin_dir))
+        else:
+            _ok(results, "the local bare origin is ignored", origin_dir)
 
     links = gitlinked_paths(root)
     if links is None:

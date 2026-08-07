@@ -320,6 +320,65 @@ PY
     "$(grep -q 'staff pm_agent.scope_folders -> myapp' <<<"$LAST_OUT" && echo 1 || echo 0)"
   rm -rf "$d"
 
+  # --- S3: branches that shipped with no covering case, each now exercised ---
+  # `gitlinked_paths()` is tested DIRECTLY, because 120000 is not reachable through check_added:
+  # if the project dir is a symlink, `islink(proj)` refuses first, and a symlink INSIDE a project
+  # never reaches the outer index at all — a nested repo stages as ONE 160000 entry (measured).
+  # So the mode support is defence in depth: the refusal closes the entrance, and this keeps the
+  # checker from reporting green about a mode it cannot see if one ever arrives another way.
+  #
+  # The first version of this case pointed check_added at the symlink and grepped for the literal
+  # "120000" — which the symlink-REFUSAL message also contains, so it passed either way, and then
+  # failed unmutated while --self-test still scored it "correctly went RED". Both bugs are fixed:
+  # the assertion is specific, and the baseline-green gate below catches an always-red case.
+  d="$(mktemp -d)"; git -C "$d" init -q -b main
+  mkdir -p "$d/elsewhere"; echo z > "$d/elsewhere/z.txt"; ln -s "$d/elsewhere" "$d/linkdir"
+  git -C "$d" add -A >/dev/null 2>&1
+  LAST_OUT="$(STANDUP_VERIFY_PROJECT="$VERIFY" python3 -c '
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("vp", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+print(m.gitlinked_paths(sys.argv[2]))' "$VERIFY" "$d" 2>&1)"
+  check "${pfx}a staged symlink blob (120000) is caught" \
+    "$(grep -q "'linkdir', '120000'" <<<"$LAST_OUT" && echo 1 || echo 0)" \
+    "gitlinked_paths saw: $LAST_OUT"
+  rm -rf "$d"
+
+  d="$(build_project)"
+  python3 - "$d/proj/standup/team.json" <<'PY'
+import json,sys
+p=sys.argv[1]; dd=json.load(open(p))
+dd["teams"].append({"id":"fresh","name":"Fresh",
+  "review_surface":{"kind":"none","label":"no face yet","how":"new project"},
+  "developers":[{"id":"fresh_a","folder":"fresh","active":True,"pair":"fresh_b"},
+                {"id":"fresh_b","folder":"fresh","active":True,"pair":"fresh_a"}]})
+json.dump(dd,open(p,"w"),indent=2)
+PY
+  git -C "$d/proj" clone -q "$d/upstream" fresh; printf '/fresh/\n' >> "$d/proj/.gitignore"
+  LAST_OUT="$(python3 "$VERIFY" added fresh --root "$d/proj" 2>&1)"; LAST_RC=$?
+  check "${pfx}kind none with no inspect is ACCEPTED" \
+    "$([[ $LAST_RC -eq 0 ]] && echo 1 || echo 0)" \
+    "this is exactly what \`new\` writes — tightening the guard breaks every new project"
+  rm -rf "$d"
+
+  d="$(build_project)"; apply_add "$d" "myapp" none
+  git -C "$d/proj" init -q --bare "$d/proj/.myapp-origin.git"
+  LAST_OUT="$(python3 "$VERIFY" added myapp --root "$d/proj" 2>&1)"; LAST_RC=$?
+  check "${pfx}an unignored local bare origin is caught" \
+    "$([[ $LAST_RC -eq 1 ]] && grep -q 'FAIL the local bare origin is ignored' <<<"$LAST_OUT" && echo 1 || echo 0)" \
+    "unignored, git add -A absorbs the project's objects — secrets included — into the install"
+  printf '/.myapp-origin.git/\n' >> "$d/proj/.gitignore"
+  LAST_OUT="$(python3 "$VERIFY" added myapp --root "$d/proj" 2>&1)"; LAST_RC=$?
+  check "${pfx}...and accepted once ignored" "$([[ $LAST_RC -eq 0 ]] && echo 1 || echo 0)"
+  rm -rf "$d"
+
+  d="$(build_project)"; apply_add "$d" "MyApp" none 2>/dev/null
+  LAST_OUT="$(python3 "$VERIFY" added Hooks --root "$d/proj" 2>&1)"
+  check "${pfx}a management-territory name is caught case-insensitively" \
+    "$(grep -q 'FAIL the name is not management territory' <<<"$LAST_OUT" && echo 1 || echo 0)" \
+    "Hooks vs hooks — one directory on a case-insensitive filesystem"
+  rm -rf "$d"
+
   section "${pfx}D. WHY the guarantee — demonstrated, not asserted"
   # These two do not check verify_project at all. They exercise git itself, because the reasons
   # behind the two hardest-to-argue rules are the thing a future reader needs in order to judge
@@ -384,6 +443,10 @@ self_test() {
     "noorigin|if not has_origin(proj):|if False:|a repo with no origin is caught"
     "symlink|elif os.path.islink(proj):|elif False:|a symlinked project directory is caught"
     "denylist|elif name.lower() in {o.lower() for o in owned}:|elif False:|a management-territory name is caught (derived, not transcribed)"
+    "mode120000|DANGEROUS_MODES = {\"160000\": \"gitlink (embedded repo)\", \"120000\": \"symlink blob\"}|DANGEROUS_MODES = {\"160000\": \"gitlink (embedded repo)\"}|a staged symlink blob (120000) is caught"
+    "kindnone|if kind != \"none\" and not str(surface.get(\"inspect\") or \"\").strip():|if not str(surface.get(\"inspect\") or \"\").strip():|kind none with no inspect is ACCEPTED"
+    "denylist-exact|elif name.lower() in {o.lower() for o in owned}:|elif name in owned:|a management-territory name is caught case-insensitively"
+    "bareorigin|if rc_ign != 0:|if False:|an unignored local bare origin is caught"
     "badpair|if unpaired:|if False:|a pair that resolves to nobody is caught"
     "badkind|if kind not in SURFACE_KINDS:|if False:|an unknown review_surface.kind is caught (--kind webb)"
     "squad-gone|if any(t.get(\"id\") == name for t in roster.get(\"teams\", [])):|if False:|a squad still in the roster is caught by the REMOVED check"
@@ -395,6 +458,15 @@ self_test() {
     "pair|if len(devs) < 2:|if False:|a LONE developer is caught (no fresh-context critic)"
   )
   local rc=0
+  # BASELINE GATE. Every mutation verdict below is "did this case go RED" — which is meaningless
+  # for a case that was already red. Measured: a broken new case failed unmutated AND was scored
+  # "correctly went RED". Establish green first, or the whole self-test is unfalsifiable.
+  if ! bash "$0" >/dev/null 2>&1; then
+    printf '!! SELF-TEST ABORTED — the unmutated suite is not green.\n' >&2
+    printf '   Every check below asks "did this case go red"; a case that is already red answers\n' >&2
+    printf '   yes for the wrong reason. Fix the baseline first, then re-run.\n' >&2
+    return 3
+  fi
   printf '=== --self-test: neutralise ONE checker branch at a time ===\n'
   # Run the mutations CONCURRENTLY. Each one re-runs the whole case suite (~7s) against its own
   # mutated copy of the checker, in its own mktemp dir, touching nothing shared — so they are
@@ -427,6 +499,21 @@ PY
   done
   wait
 
+  # EVERY job must have left a verdict. The serial version computed each verdict inline, so a
+  # mutation could not go missing; this one iterates over the files that EXIST, which is intent
+  # rather than fact. Measured: kill one subshell before it writes and the run printed 17 verdicts,
+  # claimed 18, and exited 0 — on a 2-core CI runner with 18 concurrent git-heavy jobs, a job dying
+  # is both the likeliest failure and the least visible one.
+  local collected; collected="$(ls "$jobdir" 2>/dev/null | wc -l | tr -d ' ')"
+  if [[ "$collected" -ne "${#muts[@]}" ]]; then
+    printf '\n!! SELF-TEST FAILED — %s of %s mutation job(s) reported back.\n' \
+      "$collected" "${#muts[@]}" >&2
+    printf '   A job that dies before writing its verdict is invisible to the collector, so the\n' >&2
+    printf '   missing branch would read as covered. Re-run; if it persists, run serially.\n' >&2
+    rm -rf "$jobdir"
+    return 3
+  fi
+
   local f verdict
   for f in $(ls "$jobdir" | sort -n); do
     verdict="$(head -1 "$jobdir/$f")"
@@ -440,7 +527,8 @@ PY
   done
   rm -rf "$jobdir"
 
-  [[ $rc -eq 0 ]] && printf '\n--self-test → PASS  (%d checker branch(es) neutralised; each drove its OWN named case red)\n' "${#muts[@]}"
+  # Prints what was COLLECTED, not what was intended — the two differing is the bug above.
+  [[ $rc -eq 0 ]] && printf '\n--self-test → PASS  (%s checker branch(es) neutralised; each drove its OWN named case red)\n' "$collected"
   return $rc
 }
 
