@@ -74,7 +74,7 @@ def test_status_awaiting_kain_severity_is_canonical():
         ), f"non-canonical severity {item['severity']!r} in {item['title']!r}"
 
 
-def test_status_squads_and_devs_shape():
+def test_status_squads_and_devs_shape(populated_root):
     j = client.get("/api/status").json()
     assert isinstance(j["squads"], list) and j["squads"]
     sq = j["squads"][0]
@@ -110,7 +110,7 @@ def test_status_surfaces_degraded_flag():
     assert isinstance(j["degraded"], bool)
 
 
-def test_status_devs_carry_id_and_pair():
+def test_status_devs_carry_id_and_pair(populated_root):
     """Every dev object in every squad must carry its handle (`id`) AND its
     lanemate (`pair`) so the UI can render the pairing."""
     j = client.get("/api/status").json()
@@ -156,9 +156,9 @@ def test_status_sources_block_shape():
 # --------------------------------------------------------------------------- #
 # Other endpoints
 # --------------------------------------------------------------------------- #
-def test_team_endpoint():
+def test_team_endpoint(populated_root):
     j = client.get("/api/team").json()
-    assert {s["id"] for s in j["squads"]} >= {"demo_squad", "portal"}
+    assert {s["id"] for s in j["squads"]} >= {"portal"}
 
 
 def test_log_endpoint_default_and_dated():
@@ -304,7 +304,19 @@ def isolated_status(monkeypatch):
     tmp = Path(tempfile.mkdtemp())
     root = tmp / "STANDUP"
     root.mkdir()
-    shutil.copy(real_root / "team.json", root / "team.json")
+    # The shipped roster has `teams: []` by design, and an empty roster makes /api/status report
+    # degraded — which is correct behaviour and useless for a timestamp test. Copy it, then give it
+    # a squad so the endpoint has something to serve.
+    _t = json.loads((real_root / "team.json").read_text(encoding="utf-8"))
+    _t["teams"] = [{"id": "portal", "name": "Team Portal Squad",
+                    "review_surface": {"kind": "web", "label": "Mission Control",
+                                       "inspect": "bash standup/control/inspect_portal.sh"},
+                    "developers": [
+                        {"id": "portal_backend", "folder": "standup/portal", "active": True,
+                         "git": True, "pair": "portal_frontend", "role": "Backend"},
+                        {"id": "portal_frontend", "folder": "standup/portal", "active": True,
+                         "git": True, "pair": "portal_backend", "role": "Frontend"}]}]
+    (root / "team.json").write_text(json.dumps(_t, indent=2), encoding="utf-8")
     for d in ("log", "control"):
         s = real_root / d
         if s.exists():
@@ -562,7 +574,7 @@ def _build_isolated_root(monkeypatch, log_files):
     return {"root": root, "client": TestClient(_A.app), "tmp": tmp}
 
 
-def test_pre_first_tick_fallback_is_not_degraded(monkeypatch):
+def test_pre_first_tick_fallback_is_not_degraded(populated_root, monkeypatch):
     """REGRESSION (cry-wolf): today's log absent, only a deterministically-OLDER
     log on disk with a valid tick body. parse() falls back -> fell_back True,
     shown_log_date == that prior date. The fix: degraded MUST be False, while the

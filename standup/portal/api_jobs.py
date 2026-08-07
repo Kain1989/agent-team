@@ -146,7 +146,7 @@ def create(
             status_code=409,
         )
 
-    # `target` may be given as a flat string ("dev:dev_a" / "project:demo-app"
+    # `target` may be given as a flat string ("dev:<id>" / "project:<folder>"
     # / "broadcast") OR as the explicit fields target_kind+target_id. Resolve both.
     target_kind, target_id = _parse_target(body)
     review_kind = (body.get("review_kind") or None)

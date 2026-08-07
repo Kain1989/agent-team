@@ -6,9 +6,8 @@
 
 WHY THIS EXISTS AS CODE AND NOT AS A SENTENCE IN THE SKILL.
 
-`evals/cases.json` used to hardcode `"target": "demo-app"` with both cases importing `textkit`.
-demo-app is an OPTIONAL sample the docs invite you to delete once you have your own repo — and
-once it was gone, `/eval` had no target, no case could run, and nothing said so. The suite did not
+`evals/cases.json` used to hardcode a target that the shipped tree no longer carries. When that
+target was gone, `/eval` had no target, no case could run, and nothing said so. The suite did not
 report zero; it reported nothing, which reads exactly like a suite that has not been run yet.
 
 The skip decision is therefore made HERE, deterministically, rather than being requested of the
@@ -75,8 +74,8 @@ def resolve(data: dict, repo: str) -> list:
                 "Add one, or point the case at a project directory from standup/team.json.")
         elif not os.path.isdir(os.path.join(repo, target)):
             run, reason = False, (
-                "target directory %r is not here. If this was the optional demo-app sample, that "
-                "is expected — delete or re-point this case." % target)
+                "target directory %r is not here. Re-point this case at a project you added with "
+                "/add-project, or remove it." % target)
         elif requires and not os.path.isdir(os.path.join(repo, requires)):
             run, reason = False, (
                 "requires %r, which is not here." % requires)
@@ -116,7 +115,7 @@ def main() -> int:
         print("Nothing to run here. This is a stated result, not a silent one:")
         print("  * every case is bound to a directory that is not in this checkout;")
         print("  * add a case for your own project (copy one and set `target` + `requires`), or")
-        print("  * restore the sample with /agent-team:init if you want the bundled gold-set.")
+        print("  * copy `_example_case` from evals/cases.json and point it at your project.")
     return 0
 
 

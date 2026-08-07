@@ -17,7 +17,7 @@ that holds `standup/team.json`). Edit / Write / NotebookEdit is ALLOWED only for
     governance framework: commands, native-team agent defs, skills, hooks, CI)
   * any top-level file in the team root (README, CLAUDE.md, CHANGELOG, setup.sh, ...)
 Everything else under the team root is a PROJECT and is BLOCKED -> route via the team:
-  * demo-app/          -> the demo dev squad
+  * <your projects>/   -> the squad that owns them
   * standup/portal/    -> the portal squad
   * evals/, research/, ...  -> their owner or /deep-research
 Anything OUTSIDE the team root is left alone (this plugin may be installed on a machine
@@ -33,13 +33,13 @@ TEAM-RUN EXEMPTION: while `standup/control/team_run_active` exists and is fresh 
 the gate steps aside — a native-team run's teammates ARE the team doing the project work,
 governed by the native-team task lifecycle hooks (TaskCreated/TaskCompleted secret-scan +
 kill switch) and the gated SDLC, not by this supervisor gate. Without it, teammates
-editing team-internal projects (portal, demo-app) would be false-blocked because their
+editing team-internal projects (the portal, your own repos) would be false-blocked because their
 cwd is still inside the team tree. The flag auto-expires (6h) so a forgotten one can't
 leave the gate off.
 
 Deliberately NOT gated here (differs from the multi-repo private deployment on purpose):
-  * Bash `git -C <path> <mutating>` — the run legitimately does `git -C demo-app
-    init/commit` on first setup; gating it would break the first run. A multi-repo
+  * Bash `git -C <path> <mutating>` — /add-project legitimately runs `git init`/`commit`
+    on a project it is creating; gating it would break onboarding. A multi-repo
     deployment where hand-committing a dev repo bypasses a push/merge gate DOES add that
     check; this single self-contained team folder does not need it.
 
@@ -88,7 +88,7 @@ def allowed_target(team_root, target):
         if len(parts) == 2 and sub in STANDUP_ALLOW_FILES:
             return True                      # standup/team.json|BACKLOG.md|PM_GOALS.md|engine
         return False                         # standup/portal/ and any other standup/ path
-    return False                             # demo-app/, evals/, research/, ... = project
+    return False                             # any project dir, evals/, research/, ... = project
 
 
 def _mtime_fresh(path, ttl):
@@ -165,7 +165,7 @@ def main():
         "\U0001F6D1 supervisor-mode: blocked a direct edit of PROJECT content.\n"
         f"  target: {target}\n"
         "You are the ENGINEERING MANAGER — you produce nothing yourself. This belongs to "
-        "the team (demo-app -> the dev squad; the portal under standup/portal -> the "
+        "the team (a project directory -> its squad; the portal under standup/portal -> the "
         "portal squad; evals/research/reports -> their owner or /deep-research). Route it:\n"
         "  * /work <task>   * /team <task>   * /standup   * Workflow (standup/standup.workflow.js)\n"
         "You may directly edit ONLY management/orchestration/governance: standup/team.json, "

@@ -86,6 +86,6 @@ after a human approves.
 
 `parsers/paths.py` resolves everything from `STANDUP_ROOT` (default: the `standup/` dir that
 contains this `portal/`; override via the env var). `WORKSPACE_ROOT` is its parent — dev folders
-(`demo-app`, `standup/portal`) resolve under it. Machine-local runtime state lives in
+(`a project`, `standup/portal`) resolve under it. Machine-local runtime state lives in
 `control/` (`jobs.db`, `runs/`, `requests/`, `results/`, `worktrees/`, `run.lock`,
 `heartbeat.json`) and is all gitignored.

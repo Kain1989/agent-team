@@ -71,12 +71,14 @@ Which file owns which beat, and what each gate stops: [`ARCHITECTURE.md`](ARCHIT
 
 ## The team
 
-The squads:
+The squads: **none ship**. `standup/team.json` has `teams: []`, so the first `/standup` stops and
+tells you to run `/add-project`. That command creates the squad — a pair of developers pointed at
+the repo you clone, create, or adopt.
 
-| squad | the pair | works on |
-|---|---|---|
-| Demo Dev Squad | `dev_a` (builder) and `dev_b` (reviewer and tests) | `demo-app/` |
-| Team Portal Squad | `portal_backend` and `portal_frontend` | `standup/portal/` — Mission Control itself |
+This includes the portal: **no squad ships that owns `standup/portal/`**, so Mission Control is not
+maintained by the bundled roster. The supervisor gate still classifies `standup/portal/` as project
+territory and blocks hand-editing it, so changing the portal means adding a squad for it first
+(`/add-project adopt standup/portal`, or an entry in `standup/team.json`).
 
 The staff:
 
@@ -209,8 +211,7 @@ agent-team/
 │   └── control/        the job queue, the git-worktree lifecycle, the locked-down job gate,
 │                       verify_design_quality.js and check_workflow_parse.js
 ├── evals/              the regression gold-set + resolve_cases.py (which cases can run here)
-├── demo-app/           an OPTIONAL sample project (a small Python library) — safe to delete
-└── setup.sh            installs the portal (venv, deps, gate config, demo-app git if present)
+└── setup.sh            installs the portal (venv, deps, gate config, runtime dirs)
 ```
 
 ## The gates
@@ -323,24 +324,21 @@ the directory alone.
 
 ```bash
 cd standup/portal && ../.venv/bin/python -m pytest -q                     # the portal engine
-cd demo-app && python3 -m pytest -q                                       # the sample library
 node standup/control/verify_design_quality.js --self-test                 # the design judge can still fail
 node standup/control/check_workflow_parse.js standup/standup.workflow.js  # the engine still loads
 node standup/control/tests/test_sdlc_routing.js                           # both entry paths still reach intake
 bash standup/control/tests/test_arm_path.sh                              # the exemption is armed in THIS install, not a neighbour
-bash standup/control/tests/test_setup_guard.sh                           # the installer survives a deleted demo-app
-bash standup/control/tests/test_precondition_parity.sh                   # every doc states the demo-app precondition the same way
 bash standup/control/tests/test_eval_resolver.sh                         # /eval says which cases it skipped, and why
 bash standup/control/tests/test_add_project.sh                          # /add-project's four invariants are checkable
 bash standup/control/tests/test_remove_project.sh                       # /remove-project edits surgically and keeps your code
 ```
 
-**Eight of those take `--self-test`** — `verify_design_quality.js`, `test_sdlc_routing.js`,
-`test_setup_guard.sh`, `test_precondition_parity.sh`, `test_eval_resolver.sh`, `test_arm_path.sh`, `test_add_project.sh`,
-`test_remove_project.sh` — which deliberately
-breaks the thing being judged and requires the judge to go red. Run it before trusting a green. The
-other three do not: the two pytest suites, and `check_workflow_parse.js`, which takes a **filename**
-and would read `--self-test` as one, reporting a missing file as if the engine were broken.
+**Six of those take `--self-test`** — `verify_design_quality.js`, `test_sdlc_routing.js`,
+`test_eval_resolver.sh`, `test_arm_path.sh`, `test_add_project.sh`, `test_remove_project.sh` — which
+deliberately breaks the thing being judged and requires the judge to go red. Run it before trusting
+a green. The other two do not: the portal pytest suite, and `check_workflow_parse.js`, which takes a
+**filename** and would read `--self-test` as one, reporting a missing file as if the engine were
+broken.
 
 Pass and failure counts are deliberately not printed here. A number copied into prose rots
 exactly the way a version number does; run the commands and read what they print.
@@ -352,7 +350,7 @@ for `/standup`, with a Task-tool fallback. Windows is not currently supported. T
 model and the platform notes are in [`SECURITY.md`](SECURITY.md).
 
 - License [MIT](LICENSE) · changes [`CHANGELOG.md`](CHANGELOG.md)
-- CI runs the portal and demo-app suites, the workflow parse check, and every judge above, on
+- CI runs the portal suite, the workflow parse check, and every judge above, on
   pushes to `main` and on every pull request (`.github/workflows/ci.yml`). Each judge that takes
   `--self-test` runs it first, except `verify_design_quality.js`, which CI runs **only** as
   `--self-test` — proving it can still fail without needing a live URL in CI.

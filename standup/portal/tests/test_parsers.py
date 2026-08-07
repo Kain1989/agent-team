@@ -7,6 +7,7 @@ the runner advances the day, the date-pinned assertions self-adjust via
 ``datetime.date`` math rather than hard-coded numbers.
 """
 
+import json
 import datetime
 from pathlib import Path
 
@@ -20,18 +21,16 @@ REAL_STANDUP_ROOT = Path(__file__).resolve().parents[2]
 # --------------------------------------------------------------------------- #
 # team.json
 # --------------------------------------------------------------------------- #
-def test_team_roster_has_squads_incl_portal_and_staff():
+def test_team_roster_ships_with_no_squads_and_keeps_staff():
     t = team.parse()
     assert t["_ok"] is True
-    ids = {s["id"] for s in t["squads"]}
-    # The MVP roster carries TWO squads: `demo_squad` (the working team on the
-    # bundled demo-app) and `portal` (owns this Mission Control surface). Assert
-    # the core set is present (subset, so adding a future squad won't break this).
-    assert {"demo_squad", "portal"} <= ids
-    assert len(t["squads"]) >= 2
-    # active devs present in each squad
-    for sq in t["squads"]:
-        assert len(sq["devs"]) >= 1
+    # The shipped roster has NO project squad, deliberately: a fresh install has nothing to work on
+    # until /add-project creates it, and /standup stops with that instruction rather than polling an
+    # empty board. This asserts the shipped SHAPE; parser behaviour on a populated roster is covered
+    # by the fixture-based tests below.
+    assert t["squads"] == []
+    # staff survive an empty roster — they are lenses, not squads
+    assert {s["id"] for s in t["staff"]} >= {"pm_agent", "design_lead"}
     # staff includes the pm + design + comms leads (comms_triage is inactive in
     # the MVP but still listed in the roster).
     staff_ids = {s["id"] for s in t["staff"]}
@@ -40,14 +39,22 @@ def test_team_roster_has_squads_incl_portal_and_staff():
     assert isinstance(t["bench"], list)
 
 
-def test_active_dev_index_maps_folders():
-    t = team.parse()
-    idx = team.active_dev_index(t)
-    # MVP devs: demo_squad's dev_a/dev_b -> demo-app; portal's devs -> standup/portal.
-    assert idx["dev_a"]["folder"] == "demo-app"
-    assert idx["dev_a"]["squad_id"] == "demo_squad"
-    assert idx["portal_backend"]["folder"] == "standup/portal"
-    assert idx["portal_backend"]["squad_id"] == "portal"
+def test_active_dev_index_maps_folders(tmp_path, monkeypatch):
+    # Uses a FIXTURE roster: the shipped one is empty by design, so reading it here would assert
+    # nothing. What this test is actually about is the parser's id -> folder mapping.
+    (tmp_path / "standup").mkdir()
+    (tmp_path / "standup" / "team.json").write_text(json.dumps({
+        "teams": [{"id": "sq", "name": "Squad",
+                   "review_surface": {"kind": "cli", "label": "t", "inspect": "pytest -q"},
+                   "developers": [
+                       {"id": "sq_a", "folder": "my-app", "active": True, "pair": "sq_b"},
+                       {"id": "sq_b", "folder": "my-app", "active": True, "pair": "sq_a"},
+                       ]}],
+        "staff": []}), encoding="utf-8")
+    monkeypatch.setenv("STANDUP_ROOT", str(tmp_path / "standup"))
+    idx = team.active_dev_index(team.parse())
+    assert idx["sq_a"]["folder"] == "my-app"
+    assert idx["sq_b"]["folder"] == "my-app"
 
 
 # --------------------------------------------------------------------------- #

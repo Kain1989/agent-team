@@ -16,7 +16,7 @@ _DEFAULT_ROOT = Path(__file__).resolve().parents[2]
 STANDUP_ROOT = Path(os.environ.get("STANDUP_ROOT", str(_DEFAULT_ROOT))).resolve()
 
 # The workspace root is the parent of STANDUP — the per-dev .standup folders live
-# under sibling project directories (demo-app, standup/portal, etc.), and the
+# under sibling project directories (your projects, standup/portal, etc.), and the
 # comms inbox lives at <workspace>/messages/inbox.
 WORKSPACE_ROOT = STANDUP_ROOT.parent
 
@@ -187,7 +187,7 @@ def inbox_dir() -> Path:
 def dev_standup_file(folder: str, dev_id: str) -> Path:
     """<workspace>/<folder>/.standup/<dev_id>.md.
 
-    ``folder`` comes straight from team.json (e.g. ``demo-app``,
+    ``folder`` comes straight from team.json (e.g. ``my-app``,
     ``standup/portal``). A folder under ``standup`` (like the portal's own)
     resolves inside the STANDUP root, since that root is ``<workspace>/standup``.
     """

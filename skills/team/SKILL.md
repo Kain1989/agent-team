@@ -17,7 +17,6 @@ Summarize the live native teams + their members + shared task counts (or "no nat
 1. **Preconditions.**
    - Native teams must be enabled: `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` (in `~/.claude/settings.json` `env`, then **restart Claude Code**). If unset, tell the user to enable it and stop.
    - **Sync the roster → teammate defs** so the agent types exist: `python3 standup/portal/parsers/agents_gen.py .` (same as `/agent-team:sync-roster`). Read `standup/team.json` for the active roles + their pairs.
-   - If `demo-app/.git` is missing, initialize it (see `/agent-team:standup` step 1).
 
 2. **You are the team lead.** Create a native agent team and **spawn one teammate per active role** using the generated agent types (e.g. `dev_a`, `dev_b`, `portal_backend`, `portal_frontend`, `pm_agent`, `design_lead` — whatever the roster has). Keep each teammate in its lane (the role's `focus`); honor the pairs (`dev_a`↔`dev_b` challenge each other's plan + diff in fresh context).
 

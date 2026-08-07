@@ -1,6 +1,6 @@
 ---
 name: init
-description: Scaffold a new agent-team project into the current directory (the engine, a starter roster, and a sample demo-app). Use when the user wants to set up, initialize, scaffold, or create a new agent team project, or is starting from an installed plugin with no team yet.
+description: Scaffold a new agent-team project into the current directory (the engine and a starter roster — no sample project; you add your own). Use when the user wants to set up, initialize, scaffold, or create a new agent team project, or is starting from an installed plugin with no team yet.
 allowedTools: Read, Bash, Write
 ---
 
@@ -10,10 +10,9 @@ Scaffold an agent-team project into the current directory. Do it now.
 2. Otherwise copy the engine + starter files from the installed plugin into the current directory. The plugin root is `${CLAUDE_PLUGIN_ROOT}`:
    ```
    cp -R "${CLAUDE_PLUGIN_ROOT}/standup" ./standup
-   cp -R "${CLAUDE_PLUGIN_ROOT}/demo-app" ./demo-app
    cp "${CLAUDE_PLUGIN_ROOT}/setup.sh" ./setup.sh && chmod +x ./setup.sh
    cp "${CLAUDE_PLUGIN_ROOT}/.env.example" ./.env.example
    ```
-   Then remove any copied runtime state: `rm -rf standup/.venv standup/control/jobs.db* standup/control/runs/* standup/control/worktrees/* demo-app/.git` (these are regenerated). If `${CLAUDE_PLUGIN_ROOT}` is unset (you're in a cloned repo, not an install), the files are likely already here — skip the copy.
-3. Run `./setup.sh` (venv, deps, gate config, demo-app local git + offline origin).
-4. Confirm and tell the user the next steps: `/agent-team:team-structure` to see the roster, `/agent-team:portal` to open Mission Control, `/agent-team:standup` to run the team, `/agent-team:add-team` + `/agent-team:add-role` to grow it, and edit `standup/team.json` to point a squad at your own repo (give that repo an `origin` remote).
+   Then remove any copied runtime state: `rm -rf standup/.venv standup/control/jobs.db* standup/control/runs/* standup/control/worktrees/*` (these are regenerated). If `${CLAUDE_PLUGIN_ROOT}` is unset (you're in a cloned repo, not an install), the files are likely already here — skip the copy.
+3. Run `./setup.sh` (venv, deps, gate config, runtime dirs).
+4. Confirm and tell the user the next steps: `/agent-team:team-structure` to see the roster, `/agent-team:portal` to open Mission Control, `/agent-team:standup` to run the team, `/agent-team:add-team` + `/agent-team:add-role` to grow it, and **`/agent-team:add-project`** to put the team on your own code — `clone <git-url>`, `new <name>`, or `adopt <name>`. The roster ships with no project squad, so `/agent-team:standup` will stop until you add one.

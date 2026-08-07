@@ -37,3 +37,40 @@ def _ensure_gate_configs():
                 encoding="utf-8",
             )
     yield
+
+
+# A POPULATED roster for the tests that exercise parsing/serving a roster.
+#
+# standup/team.json now ships with `teams: []` on purpose — a fresh install has no project until
+# /add-project creates one. Tests that assert on squads were reading that shipped file, so they
+# began asserting against emptiness rather than against the parser. This fixture gives them a
+# realistic roster in a tmp STANDUP_ROOT; tests that are ABOUT the shipped file (its shape, its
+# canonical policy) deliberately do not use it.
+@pytest.fixture
+def populated_root(tmp_path, monkeypatch):
+    import json
+    real = PORTAL_ROOT.parent                      # the shipped standup/ dir
+    root = tmp_path / "standup"
+    root.mkdir()
+    shipped = json.loads((real / "team.json").read_text(encoding="utf-8"))
+    shipped["teams"] = [{
+        "id": "portal", "name": "Team Portal Squad",
+        "mission": "Owns the local Mission Control portal.",
+        "coordination": "Two paired developer-agents who critique each other in fresh context.",
+        "review_surface": {"kind": "web", "label": "Mission Control (local)",
+                           "url": "http://127.0.0.1:8770",
+                           "inspect": "bash standup/control/inspect_portal.sh",
+                           "how": "Run from the project root."},
+        "developers": [
+            {"id": "portal_backend", "folder": "standup/portal", "role": "Backend",
+             "stack": "python", "git": True, "active": True, "pair": "portal_frontend",
+             "focus": "the read+job API", "tests": "pytest"},
+            {"id": "portal_frontend", "folder": "standup/portal", "role": "Frontend",
+             "stack": "js", "git": True, "active": True, "pair": "portal_backend",
+             "focus": "the single-window page", "tests": "the API contract tests"},
+        ]}]
+    (root / "team.json").write_text(json.dumps(shipped, indent=2), encoding="utf-8")
+    for sub in ("log", "control"):
+        (root / sub).mkdir(exist_ok=True)
+    monkeypatch.setenv("STANDUP_ROOT", str(root))
+    return root

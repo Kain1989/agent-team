@@ -379,6 +379,50 @@ PY
     "Hooks vs hooks — one directory on a case-insensitive filesystem"
   rm -rf "$d"
 
+  # --- the missing-gate branch. It had NO case and NO mutation, because build_project always
+  # copies the real gate (line ~74) — so the one shape where the deny list is inert was the one
+  # shape never exercised. `skills/init` produces exactly that shape: it scaffolds standup/,
+  # setup.sh and .env.example, and never hooks/.
+  d="$(build_project)"; apply_add "$d" "myapp" none; rm -rf "$d/proj/hooks"
+  LAST_OUT="$(python3 "$VERIFY" added myapp --root "$d/proj" 2>&1)"; LAST_RC=$?
+  check "${pfx}an unreadable supervisor_gate.py FAILS, it does not report ok" \
+    "$([[ $LAST_RC -eq 1 ]] && grep -q 'FAIL the name is not management territory' <<<"$LAST_OUT" && echo 1 || echo 0)" \
+    "the line used to read 'NOT CHECKED, not a pass' while being a pass"
+  rm -rf "$d"
+
+  # --- a committed secret file. The B2 refusal lived only in skill prose until now.
+  d="$(build_project)"
+  git -C "$d/upstream" checkout -q -b withsecret 2>/dev/null || true
+  printf 'DB_PASSWORD=hunter2\n' > "$d/upstream/.env"
+  git -C "$d/upstream" add -A >/dev/null && git -C "$d/upstream" "${GIT_ID[@]}" commit -q -m "oops"
+  apply_add "$d" "myapp" none; verify "$d/proj" myapp
+  check "${pfx}a committed secret-shaped file is caught by NAME" \
+    "$([[ $LAST_RC -eq 1 ]] && grep -q 'FAIL no secret-shaped file is committed' <<<"$LAST_OUT" && echo 1 || echo 0)" \
+    "the scanner misses unquoted dotenv lines entirely; the filename is the reliable signal"
+  rm -rf "$d"
+
+  # --- S2: a non-git install root must not FAIL the bare-origin check
+  # The roster MUST carry the squad: check_added returns early on an unknown id, so a fixture
+  # without it never reaches the bare-origin block and the case passes vacuously both ways.
+  d="$(mktemp -d)"; mkdir -p "$d/proj/standup" "$d/proj/hooks" "$d/proj/.myapp-origin.git" "$d/proj/myapp"
+  cp "$REPO/hooks/supervisor_gate.py" "$d/proj/hooks/"
+  git -C "$d/proj/myapp" init -q -b main && echo x > "$d/proj/myapp/a.py"
+  git -C "$d/proj/myapp" add -A && git -C "$d/proj/myapp" "${GIT_ID[@]}" commit -q -m base
+  git -C "$d/proj/myapp" remote add origin "$d/proj/.myapp-origin.git" 2>/dev/null || true
+  cat > "$d/proj/standup/team.json" <<'JSON'
+{ "teams": [ { "id": "myapp", "name": "M",
+    "review_surface": { "kind": "cli", "label": "t", "inspect": "pytest -q" },
+    "developers": [ { "id": "myapp_a", "folder": "myapp", "active": true, "pair": "myapp_b" },
+                    { "id": "myapp_b", "folder": "myapp", "active": true, "pair": "myapp_a" } ] } ],
+  "staff": [] }
+JSON
+  printf '/myapp/\n' > "$d/proj/.gitignore"
+  LAST_OUT="$(python3 "$VERIFY" added myapp --root "$d/proj" 2>&1)"
+  check "${pfx}a non-git install root does not FAIL the bare-origin check" \
+    "$(grep -q 'FAIL the local bare origin is ignored' <<<"$LAST_OUT" && echo 0 || echo 1)" \
+    "check-ignore exits 128 outside a repo — that is 'no index to absorb it', not 'unignored'"
+  rm -rf "$d"
+
   section "${pfx}D. WHY the guarantee — demonstrated, not asserted"
   # These two do not check verify_project at all. They exercise git itself, because the reasons
   # behind the two hardest-to-argue rules are the thing a future reader needs in order to judge
@@ -446,7 +490,10 @@ self_test() {
     "mode120000|DANGEROUS_MODES = {\"160000\": \"gitlink (embedded repo)\", \"120000\": \"symlink blob\"}|DANGEROUS_MODES = {\"160000\": \"gitlink (embedded repo)\"}|a staged symlink blob (120000) is caught"
     "kindnone|if kind != \"none\" and not str(surface.get(\"inspect\") or \"\").strip():|if not str(surface.get(\"inspect\") or \"\").strip():|kind none with no inspect is ACCEPTED"
     "denylist-exact|elif name.lower() in {o.lower() for o in owned}:|elif name in owned:|a management-territory name is caught case-insensitively"
-    "bareorigin|if rc_ign != 0:|if False:|an unignored local bare origin is caught"
+    "bareorigin|elif _git(root, \"check-ignore\", \"-q\", origin_dir)[0] != 0:|elif False:|an unignored local bare origin is caught"
+    "gate-unreadable|if owned is None:|if False:|an unreadable supervisor_gate.py FAILS, it does not report ok"
+    "secretname|if secrets:|if False:|a committed secret-shaped file is caught by NAME"
+    "bareorigin-nonrepo|if rc_isrepo != 0:|if False:|a non-git install root does not FAIL the bare-origin check"
     "badpair|if unpaired:|if False:|a pair that resolves to nobody is caught"
     "badkind|if kind not in SURFACE_KINDS:|if False:|an unknown review_surface.kind is caught (--kind webb)"
     "squad-gone|if any(t.get(\"id\") == name for t in roster.get(\"teams\", [])):|if False:|a squad still in the roster is caught by the REMOVED check"

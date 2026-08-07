@@ -30,18 +30,19 @@ def isolated_db(tmp_path, monkeypatch):
     root = tmp_path / "STANDUP"
     (root / "control").mkdir(parents=True)
     # A minimal team.json with the squads/devs/staff target resolution needs.
-    real_team = _paths.standup_root() / "team.json"
-    if real_team.exists():
-        shutil.copy(real_team, root / "team.json")
-    else:  # fallback minimal roster
-        (root / "team.json").write_text(json.dumps({
-            "teams": [{"id": "demo_squad", "name": "Demo Dev Squad", "developers": [
-                {"id": "dev_a", "folder": "demo-app", "active": True,
-                 "git": True, "role": "Developer — Builder"}]}],
-            "staff": [{"id": "pm_agent", "folder": "standup", "active": True,
-                       "role": "Product Manager"}],
-            "bench": [],
-        }), encoding="utf-8")
+    # An INLINE roster, always — never a copy of the shipped one. standup/team.json ships with
+    # `teams: []` (a fresh install has no project until /add-project creates one), so copying it
+    # would give these target-resolution tests nothing to resolve.
+    (root / "team.json").write_text(json.dumps({
+        "teams": [{"id": "portal", "name": "Team Portal Squad", "developers": [
+            {"id": "portal_backend", "folder": "standup/portal", "active": True,
+             "git": True, "role": "Portal Dev — Backend", "pair": "portal_frontend"},
+            {"id": "portal_frontend", "folder": "standup/portal", "active": True,
+             "git": True, "role": "Portal Dev — Frontend", "pair": "portal_backend"}]}],
+        "staff": [{"id": "pm_agent", "folder": "standup", "active": True,
+                   "role": "Product Manager"}],
+        "bench": [],
+    }), encoding="utf-8")
 
     monkeypatch.setenv("STANDUP_ROOT", str(root))
     monkeypatch.setenv("STANDUP_JOBS_DB", str(root / "control" / "jobs.db"))
@@ -63,8 +64,18 @@ def client(tmp_path, monkeypatch):
     root = tmp_path / "STANDUP"
     (root / "control").mkdir(parents=True)
     (root / "log").mkdir(parents=True)
-    real_team = _paths.standup_root() / "team.json"
-    shutil.copy(real_team, root / "team.json")
+    # Same reason as the other fixture above: the shipped roster ships empty, so a copy gives the
+    # target-resolution tests nothing to resolve. Write the roster this fixture actually needs.
+    _t = json.loads((_paths.standup_root() / "team.json").read_text(encoding="utf-8"))
+    _t["teams"] = [{"id": "portal", "name": "Team Portal Squad",
+        "review_surface": {"kind": "web", "label": "Mission Control",
+                           "inspect": "bash standup/control/inspect_portal.sh"},
+        "developers": [
+        {"id": "portal_backend", "folder": "standup/portal", "active": True, "git": True,
+         "role": "Portal Dev — Backend", "pair": "portal_frontend"},
+        {"id": "portal_frontend", "folder": "standup/portal", "active": True, "git": True,
+         "role": "Portal Dev — Frontend", "pair": "portal_backend"}]}]
+    (root / "team.json").write_text(json.dumps(_t, indent=2), encoding="utf-8")
     (root / "BACKLOG.md").write_text(
         "Last updated: 2026-06-20 (08:00 MORNING tick `wf_test` — clean)\n", encoding="utf-8")
 
@@ -96,7 +107,7 @@ def client(tmp_path, monkeypatch):
 def test_create_job_is_queued(isolated_db):
     db = isolated_db
     job = db.create_job(type="send-directive", target_kind="dev",
-                        target_id="dev_a", target_folder="demo-app",
+                        target_id="portal_backend", target_folder="standup/portal",
                         prompt="ship the thing")
     assert job["status"] == "queued"
     assert job["id"].startswith("job_")
@@ -113,7 +124,7 @@ def test_lifecycle_create_claim_transition_done(isolated_db):
     transition(running->done)."""
     db = isolated_db
     job = db.create_job(type="assign-analysis-task", target_kind="project",
-                        target_id="demo-app", target_folder="demo-app",
+                        target_id="standup/portal", target_folder="standup/portal",
                         prompt="analyse the telemetry path")
     jid = job["id"]
 
@@ -181,8 +192,8 @@ def test_list_and_counts_filter(isolated_db):
     db = isolated_db
     j1 = db.create_job(type="send-directive", target_kind="broadcast", target_id=None,
                        target_folder=None, prompt="d1")
-    j2 = db.create_job(type="trigger-review", target_kind="project", target_id="demo-app",
-                       target_folder="demo-app", prompt="r1", review_kind="pm")
+    j2 = db.create_job(type="trigger-review", target_kind="project", target_id="standup/portal",
+                       target_folder="standup/portal", prompt="r1", review_kind="pm")
     db.claim(j2["id"])
     db.transition(j2["id"], "running", "done")
     # newest-first
@@ -204,7 +215,7 @@ def test_list_and_counts_filter(isolated_db):
 def test_request_cancel_sets_intent_on_running(isolated_db):
     db = isolated_db
     job = db.create_job(type="assign-analysis-task", target_kind="project",
-                        target_id="demo-app", target_folder="demo-app", prompt="t")
+                        target_id="standup/portal", target_folder="standup/portal", prompt="t")
     db.claim(job["id"])
     updated = db.request_cancel(job["id"])
     assert updated["cancel_requested"] is True
@@ -228,7 +239,7 @@ def test_reconciler_sweeps_stuck_running_to_failed(isolated_db):
     from parsers import jobworker
     db = isolated_db
     job = db.create_job(type="assign-analysis-task", target_kind="project",
-                        target_id="demo-app", target_folder="demo-app", prompt="t")
+                        target_id="standup/portal", target_folder="standup/portal", prompt="t")
     jid = job["id"]
     # claim it, then back-date started_at well past the ceiling.
     db.claim(jid)
@@ -248,7 +259,7 @@ def test_reconciler_leaves_fresh_running_alone(isolated_db):
     from parsers import jobworker
     db = isolated_db
     job = db.create_job(type="assign-analysis-task", target_kind="project",
-                        target_id="demo-app", target_folder="demo-app", prompt="t")
+                        target_id="standup/portal", target_folder="standup/portal", prompt="t")
     db.claim(job["id"])  # started_at = now
     reconciled = jobworker.reconcile_orphans(max_runtime_s=70 * 60)
     assert reconciled == []
@@ -328,7 +339,7 @@ def test_worker_run_one_failed_agent_marks_failed(isolated_db, monkeypatch):
         "error": "read-only job exceeded 900s timeout",
     })
     job = db.create_job(type="assign-analysis-task", target_kind="project",
-                        target_id="demo-app", target_folder="demo-app", prompt="x")
+                        target_id="standup/portal", target_folder="standup/portal", prompt="x")
     claimed = db.claim_next()
 
     async def drive():
@@ -386,14 +397,14 @@ def test_api_create_returns_202_and_id(client):
 
 
 def test_api_create_resolves_dev_target_folder(client):
-    # MVP dev target: dev_a is a demo_squad developer whose folder is demo-app.
+    # dev target: portal_backend is a portal developer whose folder is standup/portal.
     r = client.post("/api/jobs", headers=_HDR, json={
-        "type": "assign-analysis-task", "target": "dev:dev_a",
-        "prompt": "look at the demo-app"})
+        "type": "assign-analysis-task", "target": "dev:portal_backend",
+        "prompt": "look at the portal"})
     assert r.status_code == 202, r.text
     job = r.json()["job"]
-    assert job["target_id"] == "dev_a"
-    assert job["target_folder"] == "demo-app"
+    assert job["target_id"] == "portal_backend"
+    assert job["target_folder"] == "standup/portal"
 
 
 def test_api_create_rejects_unknown_type(client):
@@ -428,7 +439,7 @@ def test_api_create_rejects_bad_target(client):
 
 def test_api_create_rejects_bad_review_kind(client):
     r = client.post("/api/jobs", headers=_HDR, json={
-        "type": "trigger-review", "target": "project:demo-app",
+        "type": "trigger-review", "target": "project:standup/portal",
         "review_kind": "security", "prompt": "x"})
     assert r.status_code == 409
     assert r.json()["code"] == "bad_review_kind"
@@ -460,7 +471,7 @@ def test_api_list_and_get_and_counts(client):
     client.post("/api/jobs", headers=_HDR, json={
         "type": "send-directive", "target": "broadcast", "prompt": "a"})
     rid = client.post("/api/jobs", headers=_HDR, json={
-        "type": "trigger-review", "target": "project:demo-app",
+        "type": "trigger-review", "target": "project:standup/portal",
         "review_kind": "pm", "prompt": "b"}).json()["id"]
     lst = client.get("/api/jobs").json()
     assert len(lst["jobs"]) == 2
@@ -722,8 +733,8 @@ def test_approve_requires_separate_approver_when_policy_on(client):
     self-approve (409 same_approver); a different approver succeeds (202)."""
     import parsers.db as db
     from parsers import paths
-    job = db.create_job(type="assign-task", target_kind="project", target_id="demo-app",
-                        target_folder="demo-app", prompt="add a helper", execution_path="code_task")
+    job = db.create_job(type="assign-task", target_kind="project", target_id="standup/portal",
+                        target_folder="standup/portal", prompt="add a helper", execution_path="code_task")
     jid = job["id"]
     assert (job.get("created_by") or "portal") == "portal"
     db.claim_next()  # queued -> running
@@ -740,8 +751,8 @@ def test_approve_requires_separate_approver_when_policy_on(client):
 def test_approve_self_ok_when_policy_off(client):
     """Default (no policy): the single operator can approve their own job."""
     import parsers.db as db
-    job = db.create_job(type="assign-task", target_kind="project", target_id="demo-app",
-                        target_folder="demo-app", prompt="x", execution_path="code_task")
+    job = db.create_job(type="assign-task", target_kind="project", target_id="standup/portal",
+                        target_folder="standup/portal", prompt="x", execution_path="code_task")
     jid = job["id"]
     db.claim_next()
     db.transition(jid, "running", "awaiting_approval", fields={"diff_text": "DIFF"})
