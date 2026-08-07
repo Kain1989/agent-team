@@ -3,6 +3,124 @@
 All notable changes to the **agent-team** plugin. Format: [Keep a Changelog](https://keepachangelog.com/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.1] — 2026-08-07
+
+**0.5.0 shipped with one command that could not run and two guards that were only prose. Every
+judge in the suite was green while both were true, because nothing judged either.**
+
+Zero squads was a deliberate decision and it stands. What did not survive review is the paragraph
+0.5.0 wrote about the *consequence* of that decision.
+
+### Fixed — the documented way to own the portal did not work
+
+`README.md` told readers to run `/add-project adopt standup/portal`. Measured on a fixture:
+
+- **`/add-project` refuses it.** Step 1a refuses a `name` containing `/`, and `standup/portal` has
+  one. (The deny-list line was *not* the refusal — that check compares 13 flat names and
+  `standup/portal` is not among them, so it passed.)
+- **Forcing it through breaks the very next required step.** `/sync-roster` died with
+  `FileNotFoundError: .../.claude/agents/standup/portal_a.md`; the id sanitiser mapped `-` and `.`
+  and let `/` through. The bare-origin template also deformed into `<ROOT>/.standup/portal-origin.git`,
+  putting a hidden `.standup/` in the root next to the per-developer progress-file convention. And
+  the portal's 44 files stayed tracked by the plugin repo, so one edit showed dirty in two repos.
+- **The deeper reason it was the wrong tool at all.** `/add-project`'s four guarantees — its own
+  repo, a baseline commit, its own `origin`, ignored by the root `.gitignore` — are all wrong for
+  the portal, because the portal is not a project you brought in; it is part of what this repo
+  ships.
+
+The docs now give the path that was measured to work — `/add-team` + `/add-role` × 2 +
+`/sync-roster`, with `folder: standup/portal` — and say plainly that `verify_project.py` is **not**
+the judge for that shape. Measured against a roster built from those exact commands, every failure
+it reports is a false one (a missing `<root>/portal/`, a `folder` that "should" be `portal`, a
+missing `/portal/` line in `.gitignore`), because it assumes directory == squad id == every
+developer's `folder`. Its one genuinely load-bearing check, `review_surface`, now passes — because
+`/add-team` writes the field.
+
+- **`/add-team` now requires `--kind`, and `--inspect` for every kind but `none`,** and writes a
+  `review_surface`. Its old template omitted the field while the engine hard-stops on a squad that
+  declares none — so the command produced a squad that could not run, and the missing field only
+  surfaced at the next `/standup` as an error about the engine. Documenting a "then add it by hand"
+  follow-up was rejected: a required step that exists only as a sentence someone has to remember is
+  the failure mode this project has already recorded twice.
+- **`/add-role` refuses a `dev_id` that is not a filename** (a `/`, `\`, space, `.`/`..`), since
+  `/sync-roster` now refuses the same. `[folder]` may still contain `/` — that is how a role owns a
+  subdirectory, and it is what makes the portal squad expressible at all.
+
+### Fixed — two protections that existed only in prose
+
+`verify_project.py` scored a hand-built `standup/portal` project **12 checks, 0 failed, exit 0**.
+Neither of the refusals `/add-project`'s prose promised was implemented anywhere executable.
+
+- **`illegal_project_name()`** — `name` is the directory, the squad id *and* the developer-id prefix
+  at once, so a `/`, `\`, space, leading `-`, or a `.`/`..` component is refused. It deliberately
+  does **not** refuse a `.` inside a name: measured, `Path("a.b.md").stem` is `"a.b"`, so a dotted id
+  round-trips through the prune step intact, and refusing it would be a guess.
+- **`management_head()`** — the deny list now compares the first path SEGMENT, so `standup/portal` is
+  caught the way `standup` always was. It compared the whole string before, which is why `hooks` was
+  refused and a squad pointed at the engine's own control plane was not.
+
+Both carry their own mutation in `test_add_project.sh --self-test` (now 27 branches, each driving
+its own named case red). Reverting either makes exactly one case go green — verified.
+
+- **`agents_gen.generate()` refuses an unusable role id instead of crashing on it**, validating every
+  id *before* writing any file, so a half-synced `.claude/agents/` cannot be left for `/team` to
+  spawn from. The refusal names the value, the field and the fix. Sanitising was rejected in both
+  forms: sanitising the filename alone breaks the prune step (which matches on `f.stem`) so the file
+  is deleted on the next run, and sanitising the id too makes the agent type diverge from the roster
+  id the engine dispatches to — the run then fails on an unresolvable assignee, one layer further
+  from the cause.
+
+### Fixed — the release shipped teammate definitions its own roster had pruned
+
+`.claude/agents/portal_backend.md` and `portal_frontend.md` were tracked in 0.5.0 while `teams` was
+`[]`. Running `/sync-roster` on the released tag prunes both — which is the proof it was never run
+before the release. Its own changelog entry even says it would prune them.
+
+Both files are removed, and the step is no longer something to remember:
+**`test_release_invariants.sh`** asserts that every tracked `.claude/agents/*.md` carrying the
+generated header is byte-identical to what `/sync-roster` produces from the shipped roster, with
+nothing extra and nothing missing. Hand-written definitions (no header) are out of scope, matching
+what the pruner actually does.
+
+The same judge covers the other half: **no instructional document may print an `/add-project`
+invocation that `/add-project` refuses.** It imports the name rules from `verify_project.py` rather
+than restating them, skips placeholder tokens (`<name>`, `[name]`, flags), and excludes
+`CHANGELOG.md` — a record that may not quote a command that was wrong at the time is not a record.
+
+### Added — a judge for the supervisor gate, which had none
+
+`hooks/supervisor_gate.py` is the only mechanism separating "the EM supervises" from "the EM writes
+the product", and it had no test of any kind — while `verify_project.py` derives its management deny
+list from that same file's constants, so a change there silently changed what `/add-project`
+refuses. `test_supervisor_gate.sh` drives the real hook end to end (a PreToolUse payload on stdin,
+the exit code as the verdict): 5 project paths blocked, 6 management paths allowed, both release
+valves *and their expiry*, the audit-log write, and the two fail-open paths. 11 mutations, each
+reddening its own case.
+
+Both new judges run in CI, `--self-test` first, like every other judge that has one.
+
+### Fixed — roster and prose that pointed at things that do not exist
+
+- **`design_lead` and `product_qa` scope `standup/portal`, which no shipped squad owns.** They stay
+  pointed at it — it is the one running product a fresh install has, and re-aiming them at
+  `standup/` would point the design and QA lenses at an orchestration engine with no surface at all.
+  What changed is that the roster now *says* the delivery chain is open, and both `_comment` fields
+  name the commands that close it. `design_lead.focus` also told the role to implement fixes "with
+  `portal_frontend`" — an agent that does not exist in this roster, and `focus` is injected into the
+  generated teammate definition.
+- **`/work` and `/team` gave assignee examples that are not on the shipped roster** (`portal_backend`,
+  `dev_a`, `dev_b`). Both now say to read the ids out of `standup/team.json`, and that a fresh
+  install has no legal developer assignee at all until a squad is added.
+- **`/standup`'s steps were numbered 1, 3, 4** in both `skills/standup/SKILL.md` and
+  `.claude/commands/standup.md`.
+- **`resolve_cases.py`'s empty-plan message was right for the wrong reason**: with `cases: []` it
+  said "every case is bound to a directory that is not in this checkout", which is false — there are
+  no cases at all. It now distinguishes the two states. The made-up reason is the more corrosive
+  half, because the reader goes looking for a directory that was never named.
+- **`test_add_project.sh`'s collector comment claimed "17 of 18"** while the suite ran 25. The count
+  is read from `muts` at run time and printed; it is no longer restated in prose.
+- **`ARCHITECTURE.md`'s `agents_gen.py` line references** were updated to the lines they now name.
+
 ## [0.5.0] — 2026-08-06
 
 **The bundled sample is gone. A fresh install has no project until you add one, and `/standup`
