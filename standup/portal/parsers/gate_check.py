@@ -38,6 +38,28 @@ found in exactly that state on a real install: a Homebrew python had been baked 
 and later uninstalled. The question is never "is there a config" but "does the config
 still describe something real".
 
+WHAT THIS DOES **NOT** ANSWER — read this before trusting a green
+----------------------------------------------------------------
+This is a **LIVENESS** check, not an **INTEGRITY** check. It answers "is a boundary
+there and answering", never "is the boundary correct". A three-line hook that replies
+`allow` to every event passes every check in this module, by design: it is alive, it
+is parseable, it decides. Whether it decides the RIGHT thing is the job of
+`control/job_gate_hook.py` + `control/job_code_gate_hook.py` and the tests that pin
+their decisions (`tests/test_readonly_gate.py`, `tests/test_jobs.py`).
+
+That distinction is the whole reason the module exists — the failure it was written for
+is a gate that is not running at all — but a green from a liveness check reads exactly
+like a green from a correctness check, and a reader who conflates them ends up trusting
+"the gate is configured" as "the gate is right".
+
+BLAST RADIUS OF THE SMOKE RUN. `_smoke_problem` EXECUTES the command named in the
+config. Whoever can write `control/job_*_gate.json` therefore chooses a command this
+trusted parent process runs. That is not a new capability — the same write already lets
+them install a hook that allows everything, which is a strictly easier and more useful
+attack — but it does mean the probe must not hand that command anything it does not
+need. It runs under a minimal allow-listed environment (`_probe_env`) with every
+credential-bearing variable absent, in a fresh empty directory, never the caller's.
+
 Stdlib-only, no imports from the rest of the portal, so it can be used from a hook,
 a conftest, setup, or a bare `python -m`.
 """
@@ -49,7 +71,8 @@ import os
 import shlex
 import shutil
 import subprocess
-from typing import List, Union
+import tempfile
+from typing import Dict, List, Union
 
 PathLike = Union[str, "os.PathLike[str]"]
 
@@ -80,6 +103,48 @@ _VALID_DECISIONS = frozenset({"allow", "deny", "ask"})
 # launch argv, and that silently swallowed the smoke probe until this was pinned.)
 _RUN = subprocess.run
 
+# The ONLY variables the probe hands the hook. An ALLOW-list, not a strip-list: a strip-list
+# has to enumerate every credential naming convention that will ever exist, and misses the
+# first one it has not seen (`DATABASE_URL` carries a password and matches no pattern named
+# after a secret). The probe is a synthetic PreToolUse event; answering it needs nothing but
+# an interpreter that starts.
+#
+# Each entry earns its place:
+#   PATH        — resolves a bare-name interpreter. The same PATH _interpreter_problem used
+#                 with shutil.which(), so the pre-check and the run cannot disagree.
+#   HOME        — pyenv/asdf/Homebrew shims and per-user site dirs read it.
+#   TMPDIR/TEMP/TMP  — tempfile inside the hook.
+#   LANG/LC_*   — a hook whose refusal reason is not ASCII.
+#   PYTHONPATH/PYTHONHOME/VIRTUAL_ENV/NODE_PATH — a hook that lives inside a venv or a node
+#                 tree must still import itself, or a healthy gate reports BROKEN and the
+#                 queue stops. Fidelity to how the hook really runs is a safety property
+#                 here, not a convenience: a false BROKEN is a denial of service.
+#   SYSTEMROOT/COMSPEC/PATHEXT — Windows is not a supported platform; these cost nothing and
+#                 keep the list from being the reason it cannot become one.
+#
+# Deliberately NOT passed: the hooks' own configuration (`STANDUP_CODE_WORKTREE`). The probe
+# asks what the hook does with no worktree scoped, and both shipped hooks answer `deny` —
+# verified. A hook that needs a credential to reach a decision is itself a finding.
+_PROBE_ENV_KEEP = frozenset({
+    "PATH", "HOME",
+    "TMPDIR", "TEMP", "TMP",
+    "LANG", "LC_ALL", "LC_CTYPE",
+    "PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "NODE_PATH",
+    "SYSTEMROOT", "COMSPEC", "PATHEXT",
+})
+
+
+def _probe_env() -> Dict[str, str]:
+    """The environment the smoke probe runs under: allow-listed, credential-free.
+
+    The real hook runs under `agent_run._child_env()`, which strips credential-bearing
+    variables. The probe used to run under the FULL parent environment — so the one place
+    this repo executes a command named by an on-disk config was also the one place that
+    handed it every token the portal process happens to be holding. Measured from inside a
+    probe: `SNOWFLAKE_TOKEN`, `ATLASSIAN_API_TOKEN`, `SLACK_BOT_TOKEN`.
+    """
+    return {k: v for k, v in os.environ.items() if k.upper() in _PROBE_ENV_KEEP}
+
 
 def _smoke_problem(command: str) -> str:
     """Run the hook on a synthetic event; return why it is unusable, else "".
@@ -104,6 +169,14 @@ def _smoke_problem(command: str) -> str:
     "block" convention, and a hook that blocks demonstrably ran. Anything else (any other
     non-zero exit, a hang, exit 0 with unparseable output) means the boundary is not
     answering, and an unverifiable boundary is treated as absent.
+
+    LIVENESS, NOT INTEGRITY: "the hook answered" is all this establishes. A hook that
+    replies `allow` to everything answers perfectly and passes. See the module docstring.
+
+    The command comes from an on-disk config, so running it is a real (if small) execution
+    surface. It is therefore given `_probe_env()` — allow-listed, no credentials — and a
+    fresh EMPTY directory as cwd, so a hook that resolves relative paths cannot reach into
+    whatever directory the portal happened to be started from.
     """
     try:
         argv = shlex.split(command)
@@ -112,9 +185,13 @@ def _smoke_problem(command: str) -> str:
     if not argv:
         return ""
     try:
+        sandbox = tempfile.mkdtemp(prefix="gate-smoke-")
+    except OSError as exc:                                       # pragma: no cover - guard
+        return f"could not create a directory to smoke-run the hook in ({exc})"
+    try:
         proc = _RUN(
             argv, input=_SMOKE_EVENT, capture_output=True, text=True,
-            timeout=_SMOKE_TIMEOUT_S,
+            timeout=_SMOKE_TIMEOUT_S, env=_probe_env(), cwd=sandbox,
         )
     except subprocess.TimeoutExpired:
         return (
@@ -123,6 +200,8 @@ def _smoke_problem(command: str) -> str:
         )
     except (OSError, ValueError) as exc:
         return f"hook could not be executed ({exc}): {command!r}"
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
 
     if proc.returncode == 2:
         return ""  # documented "block" exit; the hook ran.
@@ -179,9 +258,37 @@ def _interpreter_problem(command: str) -> str:
 
     # The hook script itself must exist too — a valid interpreter pointed at a
     # missing script also produces a non-zero exit and the same silent fail-open.
+    #
+    # This used to read `arg.endswith(".py")`, which certified a config naming a missing
+    # `hook.sh`, `hook.js` or extensionless hook as having no path problem. The outcome was
+    # still fail-CLOSED — the smoke run below catches it — but only as "hook EXITS 2" or an
+    # exit 127, which sends the reader looking at the hook's logic instead of at the path
+    # that does not exist. A precise reason before launch is the whole value of this
+    # function; the extension was never what made an argument a path.
+    #
+    # POLICY, stated rather than inferred: ANY path-shaped argument that names nothing is a
+    # broken config, whatever position it sits in. The alternative — guessing which argument
+    # is "the script" — needs a table of which flags take values (`-u` does not, `--root`
+    # does), and a wrong guess in either direction is worse than this rule: miss it and the
+    # reason stays hidden, over-reach and the lint cries wolf. Two narrow exclusions keep it
+    # from doing so here:
+    #   * `-`-prefixed tokens are flags, not paths;
+    #   * the token after `-c`/`-m` is python source or a module name — arbitrary text that
+    #     can contain a `/` — so it is skipped rather than read as a path.
+    skip_next = False
     for arg in argv[1:]:
-        if arg.endswith(".py") and not os.path.isfile(arg):
-            return f"hook script does not exist: {arg!r}"
+        if skip_next:
+            skip_next = False
+            continue
+        if arg.startswith("-"):
+            skip_next = arg in ("-c", "-m")
+            continue
+        looks_like_path = (os.sep in arg) or arg.startswith(("./", "../", "~"))
+        if looks_like_path and not any(c.isspace() for c in arg) and not os.path.exists(arg):
+            return (
+                f"hook script does not exist: {arg!r} — Claude Code FAILS OPEN on an "
+                f"unlaunchable hook, so this gate would silently allow every tool"
+            )
     return ""
 
 
@@ -189,8 +296,9 @@ def gate_config_problems(path: PathLike) -> List[str]:
     """Every reason `path` is unusable as a job gate `--settings` file.
 
     An empty list means the gate is structurally sound AND its hooks can actually be
-    launched. Never raises — use this for reporting/repair (conftest, setup, a CLI);
-    use :func:`verify_gate_config` at the point of launch.
+    launched — it does NOT mean they decide correctly. Liveness, not integrity; see the
+    module docstring. Never raises — use this for reporting/repair (conftest, setup, a
+    CLI); use :func:`verify_gate_config` at the point of launch.
     """
     p = os.fspath(path)
     if not os.path.isfile(p):
@@ -257,6 +365,10 @@ def verify_gate_config(path: PathLike) -> None:
 
     Call this immediately before spawning a gated `claude -p`. If it raises, DO NOT
     LAUNCH: Claude Code would run the job with the gate silently absent.
+
+    Not raising means a hook is THERE and ANSWERING. It says nothing about what it
+    answers — an always-`allow` hook satisfies this function completely. The decisions
+    are pinned by the hook tests, not here.
     """
     problems = gate_config_problems(path)
     if problems:
