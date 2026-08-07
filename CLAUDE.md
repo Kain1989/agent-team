@@ -80,8 +80,17 @@ worktree → review the diff → **Approve** → commit. (Details: `standup/port
   cloned, created, or adopted.
 - **Including the portal.** No shipped squad owns `standup/portal/`. The supervisor gate still
   treats it as project territory and blocks hand-editing it, so changing Mission Control means
-  adding a squad for it first — the "route it through the team" rule above still holds; there is
-  simply no team for that path until you make one.
+  creating a squad for it first — the "route it through the team" rule above still holds; there is
+  simply no team for that path until you make one. **`/add-project` is the wrong tool here**: it
+  brings a repo IN, and its four guarantees (own repo, baseline commit, own `origin`, root-ignored)
+  are all wrong for something this repo ships — it also refuses the name, since `name` is the
+  directory, the squad id and the dev-id prefix at once and `standup/portal` has a `/` in it. Use
+  `/add-team portal — own the local Mission Control portal --kind web --inspect "bash
+  standup/control/inspect_portal.sh"`, then `/add-role portal portal_backend "<role>" standup/portal`
+  twice (the fourth argument is the `folder`, which may contain `/`), then `/sync-roster`. Do not
+  verify that shape with `standup/control/verify_project.py` — it checks `/add-project`'s invariants,
+  which assume directory == squad id == every developer's `folder`, and reports failures here that
+  are not ones. Full walkthrough: [`README.md`](README.md#the-team).
 - **Staff** — `pm_agent` (Steve-Jobs-grounded scope/say-no + board) · `design_lead`
   (Apple-HIG lens on the portal UI) · `product_qa` (the one role that USES the product as a user
   every tick and reports where it breaks). `comms_triage` is present but inactive. `pm_agent`,

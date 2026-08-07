@@ -77,8 +77,36 @@ the repo you clone, create, or adopt.
 
 This includes the portal: **no squad ships that owns `standup/portal/`**, so Mission Control is not
 maintained by the bundled roster. The supervisor gate still classifies `standup/portal/` as project
-territory and blocks hand-editing it, so changing the portal means adding a squad for it first
-(`/add-project adopt standup/portal`, or an entry in `standup/team.json`).
+territory and blocks hand-editing it, so changing the portal means creating a squad for it first.
+
+`/add-project` is the wrong tool for this one. It exists to bring a repo IN, and every guarantee it
+makes — its own git repo, a baseline commit, its own `origin`, ignored by the root `.gitignore` — is
+wrong for the portal, which is not a project you added but part of what this repo ships. It also
+refuses the name outright, because `name` is the directory, the squad id and the developer-id prefix
+at once and `standup/portal` contains a `/`. Create the squad directly instead:
+
+```
+/add-team portal — own the local Mission Control portal --kind web --inspect "bash standup/control/inspect_portal.sh"
+/add-role portal portal_backend  "Portal Dev — Backend & Jobs" standup/portal
+/add-role portal portal_frontend "Portal Dev — Frontend"       standup/portal
+/sync-roster
+```
+
+`/add-role`'s fourth positional argument is the `folder`, and a folder may contain `/` — that is how
+a role owns a subdirectory. `--kind` and `--inspect` are not decoration: the engine refuses to run a
+squad whose product face nobody declared, so `/add-team` asks for them before it writes anything.
+
+**Do not check this shape with `standup/control/verify_project.py`.** That checker enforces
+`/add-project`'s invariants, which assume the directory, the squad id and every developer's `folder`
+are one and the same string. Measured against a roster built from exactly the commands above, every
+failure it reports is a false one: a missing `<root>/portal/` directory, a `folder` that "should" be
+`portal`, and a missing `/portal/` line in `.gitignore` — none of which apply to code that already
+lives here and stays where it is. Its one check that would matter, `review_surface`, passes, because
+`/add-team` refuses to create a squad without one.
+
+Two roles already point at `standup/portal/` before you do any of this: `design_lead` and
+`product_qa` (below) both scope it. Until this squad exists they have somewhere to look and nobody
+to hand findings to — the commands above are what closes that loop.
 
 The staff:
 
@@ -331,14 +359,24 @@ bash standup/control/tests/test_arm_path.sh                              # the e
 bash standup/control/tests/test_eval_resolver.sh                         # /eval says which cases it skipped, and why
 bash standup/control/tests/test_add_project.sh                          # /add-project's four invariants are checkable
 bash standup/control/tests/test_remove_project.sh                       # /remove-project edits surgically and keeps your code
+bash standup/control/tests/test_supervisor_gate.sh                      # the gate still blocks product work and allows management
+bash standup/control/tests/test_release_invariants.sh                   # what ships is consistent with itself
 ```
 
-**Six of those take `--self-test`** — `verify_design_quality.js`, `test_sdlc_routing.js`,
-`test_eval_resolver.sh`, `test_arm_path.sh`, `test_add_project.sh`, `test_remove_project.sh` — which
-deliberately breaks the thing being judged and requires the judge to go red. Run it before trusting
-a green. The other two do not: the portal pytest suite, and `check_workflow_parse.js`, which takes a
-**filename** and would read `--self-test` as one, reporting a missing file as if the engine were
-broken.
+**Every judge here takes `--self-test` except two** — it deliberately breaks the thing being judged
+and requires the judge to go red, so run it before trusting a green. The two that do not are the
+portal pytest suite, and `check_workflow_parse.js`, which takes a **filename** and would read
+`--self-test` as one, reporting a missing file as if the engine were broken. (This line used to
+carry a count and a hand-written list of names; both went stale the first time a judge was added,
+which is the same rot the paragraph below is about.)
+
+The last two are newer and worth saying what they are for. `test_supervisor_gate.sh` covers
+`hooks/supervisor_gate.py` — the one mechanism separating "the EM supervises" from "the EM writes
+the product" — which had no test of any kind, while `verify_project.py` derives its deny list from
+that file's constants. `test_release_invariants.sh` judges the CONTENT of the release rather than
+its behaviour: that no instructional document prints an `/add-project` invocation the command
+refuses, and that the tracked `.claude/agents/*.md` are exactly what `/sync-roster` generates. Both
+of those shipped broken in 0.5.0 and no existing judge could see either.
 
 Pass and failure counts are deliberately not printed here. A number copied into prose rots
 exactly the way a version number does; run the commands and read what they print.
