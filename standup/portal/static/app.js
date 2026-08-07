@@ -15,6 +15,16 @@
   const TICK_MS = 1000;           // countdown + freshness repaint
   // After this long with no successful poll, treat the portal as BLIND (can't see system).
   const BLIND_AFTER_MS = 30000;
+  // Every GET aborts after this long (getJSON), so it is also the earliest moment a request
+  // can be KNOWN to have failed. Named, not inlined, because the first-paint backstop below
+  // must be DERIVED from it rather than guessed at.
+  const REQUEST_TIMEOUT_MS = 4000;
+  // First-paint backstop. This was a flat 1200ms — shorter than the request timeout — so a
+  // backend that was merely SLOW, and perfectly alive, flashed the embedded sample data at
+  // the user before its real answer landed. A fallback that can pre-empt the real answer is
+  // not a fallback, it is a lie with a timer on it. Deriving it from REQUEST_TIMEOUT_MS is
+  // what keeps "only after the first request has actually failed" true by construction.
+  const FIRST_PAINT_FALLBACK_MS = REQUEST_TIMEOUT_MS + 500;
   // MVP: this build runs ON-DEMAND (the tick scheduler is off by default; the job worker
   // handles work as you submit it). So "scheduler off" is the NORMAL state, not a "runner
   // down" alarm — when true, the hero/verdict present scheduler-off calmly instead of red.
@@ -30,6 +40,10 @@
   // — so opening the page off-disk exercises the same wrapping, 3-stream comms card,
   // and full-roster paths the live data hits. A short-string mock can never again
   // hide a long-string layout break.
+  // That last sentence used to be a promise with no mechanism: nothing stopped a later
+  // tidy-up from shortening these strings and quietly reopening the same layout bug.
+  // standup/portal/tests/test_static_mock.py now pins the length distribution to a floor —
+  // it is a FIXTURE, not decoration, so shortening it is a test failure, not a cleanup.
   const MOCK_STATUS = {
     org: { health: "yellow", counts: { red: 1, yellow: 3, reported: 12, worked: 6, green: 5, committed: 4, prs: 2 } },
     runner: {
@@ -46,20 +60,20 @@
     // and a 360-day noise item — so opening the page off-disk exercises the dedup,
     // overdue copy, lane grouping, and noise-penalty paths the live data hits.
     awaiting_kain: [
-      { title: "Approve dev_b's truncate() commit", severity: "P0", days_remaining: 0, leverage: "lands the first demo-app helper" },
-      { title: "Decide slugify separator: dash vs underscore", severity: "P0", days_remaining: null, leverage: "unblocks dev_a's slugify task" },
-      { title: "Cut the demo-app v0.1 tag", severity: "P1", days_remaining: 11, leverage: null },
+      { title: "Approve dev_2's truncate() commit", severity: "P0", days_remaining: 0, leverage: "lands the first your-app helper" },
+      { title: "Decide slugify separator: dash vs underscore", severity: "P0", days_remaining: null, leverage: "unblocks dev_1's slugify task" },
+      { title: "Cut the your-app v0.1 tag", severity: "P1", days_remaining: 11, leverage: null },
       { title: "Review the portal severity-contract test", severity: "P1", days_remaining: null, leverage: "closes the front↔back seam" },
       { title: "Name the top-words helper API", severity: "P1", days_remaining: null, leverage: null },
-      { title: "Update the demo-app README quickstart", severity: "P2", days_remaining: -4, leverage: "unblocks onboarding" },
+      { title: "Update the your-app README quickstart", severity: "P2", days_remaining: -4, leverage: "unblocks onboarding" },
       { title: "Backfill title-case helper docs", severity: "P2", days_remaining: 360, leverage: "housekeeping" },
       // exact dup of item[0] (same title + severity) -> must dedup to one row
-      { title: "Approve dev_b's truncate() commit", severity: "P0", days_remaining: 0, leverage: "lands the first demo-app helper" }
+      { title: "Approve dev_2's truncate() commit", severity: "P0", days_remaining: 0, leverage: "lands the first your-app helper" }
     ],
     squads: [
-      { id: "demo_squad", name: "Demo Dev Squad", health: "green", devs: [
-        { id: "dev_a", role: "Developer — Builder",           pair: "dev_b", branch: null, health: null, current_task: "implement slugify() with a max_length cap; tests green", next_step: "start the top_words helper next", last_entry_date: isoDateToday(), last_entry: { date: isoDateToday(), title: "slugify max_length" } },
-        { id: "dev_b", role: "Developer — Reviewer & Tests",  pair: "dev_a", branch: "auto/standup-truncate-helper", health: null, current_task: "truncate() helper — committed to auto/standup-truncate-helper, awaiting approval", next_step: "on approve it lands on the branch; main stays untouched", last_entry_date: "2026-06-20", last_entry: { date: "2026-06-20", title: "truncate committed" } }
+      { id: "your_squad", name: "Your Dev Squad", health: "green", devs: [
+        { id: "dev_1", role: "Developer — Builder",           pair: "dev_2", branch: null, health: null, current_task: "implement slugify() with a max_length cap; tests green", next_step: "start the top_words helper next", last_entry_date: isoDateToday(), last_entry: { date: isoDateToday(), title: "slugify max_length" } },
+        { id: "dev_2", role: "Developer — Reviewer & Tests",  pair: "dev_1", branch: "auto/standup-truncate-helper", health: null, current_task: "truncate() helper — committed to auto/standup-truncate-helper, awaiting approval", next_step: "on approve it lands on the branch; main stays untouched", last_entry_date: "2026-06-20", last_entry: { date: "2026-06-20", title: "truncate committed" } }
       ]},
       { id: "portal", name: "Team Portal Squad", health: "yellow", devs: [
         { id: "portal_backend",  role: "Portal Dev — Backend & Jobs (FastAPI)", pair: "portal_frontend", branch: null, health: null, current_task: "regression test: P0/P1/P2 severity contract on the decisions board", next_step: "cover the blockquoted-heading parse path too", last_entry_date: isoDateToday(), last_entry: { date: isoDateToday(), title: "severity contract test" } },
@@ -74,7 +88,7 @@
     staff: [
       { id: "comms_triage", role: "Comms Triage — Local Intake & Routing (optional, off by default in the MVP)",  note: "reads a local messages/inbox/ folder; routed items appear on the EM board tagged source=comms" },
       { id: "pm_agent",     role: "Product Manager Agent (Steve Jobs-grounded scope + say-no + board)",            note: "joins INTAKE + the DESIGN challenge; the board reflects its keep/kill calls" },
-      { id: "design_lead",  role: "Design Lead — Clarity & Craft (Apple HIG-grounded)",                            note: "pairs with portal_frontend; a light design read every tick + a full critique on the morning design tick" }
+      { id: "design_lead",  role: "Design Lead — Clarity & Craft (Apple HIG-grounded)",                            note: "runs a light design read every tick + a full critique on the morning design tick (args.design); no shipped squad owns standup/portal, so its findings land on the board for a human, not on a developer" }
     ],
     // comms = 1 agent (comms_triage), 3 streams: MESSAGE / EMAIL / MEETING, each
     // read from local sample files under messages/inbox/. Each carries a count +
@@ -412,9 +426,9 @@
 
   // ───────────────────────── fetch ─────────────────────────
   async function getJSON(url) {
-    // 4s timeout so a hung backend never freezes the UI
+    // bounded so a hung backend never freezes the UI
     const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 4000);
+    const t = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
     try {
       const r = await fetch(url, { method: "GET", cache: "no-store", signal: ctrl.signal });
       if (!r.ok) throw new Error("HTTP " + r.status);
@@ -2684,8 +2698,14 @@
     pollStatus().then(() => { if (!S.lastStatusOk) bootstrapMockIfNeeded(); });
     pollHeartbeat();
     pollTeam();
-    // if the very first status call is slow/dead, don't leave a blank screen
-    setTimeout(() => { if (!S.lastStatusOk && !S.data) bootstrapMockIfNeeded(); }, 1200);
+    // Backstop only. A first status call that genuinely FAILS already bootstraps the mock
+    // on its own — pollStatus()'s catch runs handleStatusFailure(), which calls
+    // bootstrapMockIfNeeded() when no payload has ever arrived — and its abort fires at
+    // REQUEST_TIMEOUT_MS, so "dead" and "hung" are both covered without this timer. What is
+    // left for this line is the pathological case where that promise never settles at all,
+    // and it must never run BEFORE the request could have failed: a slow-but-alive backend
+    // showing sample data for a moment is the bug this delay exists to not cause.
+    setTimeout(() => { if (!S.lastStatusOk && !S.data) bootstrapMockIfNeeded(); }, FIRST_PAINT_FALLBACK_MS);
 
     scheduleStatus();                              // backoff-aware status loop
     setInterval(pollHeartbeat, HEARTBEAT_MS);
