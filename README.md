@@ -379,8 +379,12 @@ The last two are newer and worth saying what they are for. `test_supervisor_gate
 the product" — which had no test of any kind, while `verify_project.py` derives its deny list from
 that file's constants. `test_release_invariants.sh` judges the CONTENT of the release rather than
 its behaviour: that no instructional document prints an `/add-project` invocation the command
-refuses, and that the tracked `.claude/agents/*.md` are exactly what `/sync-roster` generates. Both
-of those shipped broken in 0.5.0 and no existing judge could see either.
+refuses, and that the `.claude/agents/*.md`, the roster and the portal's off-disk mock this repo
+**ships** are consistent with each other. Both of the first two shipped broken in 0.5.0 and no
+existing judge could see either. Every case that judges the release reads the **committed** blob,
+never your working tree — customising your own install must never redden the shipped suite — and
+when there is no committed blob to read (a tarball install with no `.git`) the run says so in its
+summary rather than reporting a clean pass on a question it never asked.
 
 Pass and failure counts are deliberately not printed here. A number copied into prose rots
 exactly the way a version number does; run the commands and read what they print.

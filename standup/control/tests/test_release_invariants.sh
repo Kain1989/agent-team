@@ -36,8 +36,13 @@
 #      before shipping" is a step that exists only as a sentence someone has to remember, and this
 #      repo has already recorded what happens to those.
 #
-# Both are release-time invariants: cheap to check, invisible to every other gate, and the kind of
-# thing that is only ever noticed by a user.
+#      B then made C's mistake in the opposite direction: it read the roster and the definitions off
+#      DISK, so a user standing between README step 3 (`/add-team` + `/add-role`) and step 4
+#      (`/sync-roster`) got two MISSING lines and EXIT=1 for following the documentation in order.
+#      It now reads the committed blobs on both sides. See the block above `scan_agents`.
+#
+# Every one of these is a release-time invariant: cheap to check, invisible to every other gate, and
+# the kind of thing that is only ever noticed by a user.
 #
 # SCOPE, stated rather than assumed. Group A reads instructional documents only. CHANGELOG.md is
 # deliberately EXCLUDED: it is a historical record, and a record that may not quote a command which
@@ -174,7 +179,28 @@ PY
 }
 
 # --------------------------------------------------------------------------------------------
-# B. the tracked teammate definitions ARE what /sync-roster generates from the shipped roster.
+# B. the teammate definitions this repo SHIPS are what /sync-roster generates from the roster it
+#    SHIPS. Both sides read from the committed blobs (`git show HEAD:…`), never the working tree.
+#
+# That distinction is the case, not a detail — the same one C was moved here for, and B had it
+# wrong in the opposite direction for just as long. README step 3 is `/add-team portal` +
+# `/add-role` twice; step 4 is `/sync-roster`. A user standing between them has two roles in their
+# roster and no definitions yet, and B answered:
+#
+#     MISSING portal_backend.md — the roster has this role and no definition ships for it
+#     MISSING portal_frontend.md                                                  EXIT=1
+#
+# Following the documented sequence turned the shipped judge red mid-sequence, and running step 4
+# turned it green again — so the judge was reporting on the reader's PROGRESS THROUGH THE README,
+# not on the release. (Pre-existing on main; not introduced by the batch that added C.)
+#
+# The invariant B was written for is untouched and still true: `.claude/agents/portal_backend.md`
+# and `portal_frontend.md` were TRACKED while the shipped roster had no squad owning them, which is
+# the proof `/sync-roster` was never run before v0.5.0. "Tracked" was always the operative word;
+# reading the directory off disk was the mistake.
+#
+# BOTH halves are cases, because a check that only goes red is half a check: committed drift must
+# FAIL, and a user's uncommitted customisation must PASS.
 #
 # Scoped to files carrying the generated header, because a HAND-WRITTEN agent definition is
 # explicitly allowed to survive a regen (agents_gen prunes on that header, and a portal test asserts
@@ -182,36 +208,66 @@ PY
 # --------------------------------------------------------------------------------------------
 scan_agents() { # -> prints "EXTRA <name>" / "MISSING <name>" / "STALE <name>"
   ROOT="$ROOT" PORTAL="$PORTAL" python3 <<'PY'
-import os, sys, tempfile, shutil
+import os, subprocess, sys, tempfile, shutil
 from pathlib import Path
 
-root = Path(os.environ["ROOT"])
+root = os.environ["ROOT"]
 sys.path.insert(0, os.environ["PORTAL"])
 from parsers import agents_gen                                     # noqa: E402
 
-tj = root / "standup" / "team.json"
-tracked_dir = root / ".claude" / "agents"
-if not tj.exists():
-    print("!!JUDGE no standup/team.json under %s" % root); raise SystemExit(0)
+AGENTS_DIR = ".claude/agents"
+
+
+def git(*args):
+    """Raw stdout bytes of a git command, or None if it failed / git is unusable."""
+    try:
+        p = subprocess.run(["git", "-C", root, *args], capture_output=True)
+    except OSError:
+        return None
+    return p.stdout if p.returncode == 0 else None
+
+
+roster = git("show", "HEAD:standup/team.json")
+if roster is None:
+    print("!!NA %s has no committed standup/team.json (not a git checkout?) — this case judges the "
+          "definitions the repo SHIPS against the roster it SHIPS, and only a checkout can answer "
+          "that" % root)
+    raise SystemExit(0)
+
+listing = git("ls-tree", "-r", "--name-only", "-z", "HEAD", "--", AGENTS_DIR)
+if listing is None:
+    print("!!NA git could not list %s at HEAD under %s" % (AGENTS_DIR, root))
+    raise SystemExit(0)
 
 tmp = Path(tempfile.mkdtemp())
 try:
-    agents_gen.generate(tj, tmp)                                   # NEVER the real directory
-    gen = {p.name: p.read_bytes() for p in tmp.glob("*.md")}
-    tracked = {}
-    if tracked_dir.is_dir():
-        for p in sorted(tracked_dir.glob("*.md")):
-            body = p.read_bytes()
-            if agents_gen._HEADER.encode("utf-8") in body:         # generated, not hand-written
-                tracked[p.name] = body
-    for name in sorted(set(tracked) - set(gen)):
-        print("EXTRA %s — generated by an earlier roster and no longer in it; /sync-roster prunes it"
+    committed_roster = tmp / "team.json"
+    committed_roster.write_bytes(roster)
+    out = tmp / "agents"
+    agents_gen.generate(committed_roster, out)                     # NEVER the real directory
+    gen = {p.name: p.read_bytes() for p in out.glob("*.md")}
+
+    shipped = {}
+    for rel in listing.decode("utf-8", "replace").split("\0"):
+        if not rel.endswith(".md"):
+            continue
+        body = git("show", "HEAD:" + rel)
+        if body is None:
+            continue
+        if agents_gen._HEADER.encode("utf-8") in body:             # generated, not hand-written
+            shipped[os.path.basename(rel)] = body
+
+    for name in sorted(set(shipped) - set(gen)):
+        print("EXTRA %s — this repo SHIPS a generated definition for a role the SHIPPED roster no "
+              "longer has; /sync-roster prunes it, so shipping it is the proof it was not run"
               % name)
-    for name in sorted(set(gen) - set(tracked)):
-        print("MISSING %s — the roster has this role and no definition ships for it" % name)
-    for name in sorted(set(gen) & set(tracked)):
-        if gen[name] != tracked[name]:
-            print("STALE %s — differs from what the current roster generates" % name)
+    for name in sorted(set(gen) - set(shipped)):
+        print("MISSING %s — the SHIPPED roster declares this role and no definition ships for it, "
+              "so /team cannot spawn it out of the box" % name)
+    for name in sorted(set(gen) & set(shipped)):
+        if gen[name] != shipped[name]:
+            print("STALE %s — the shipped definition differs from what the shipped roster generates"
+                  % name)
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
 PY
@@ -434,7 +490,7 @@ run_cases() {
   section "A. no instructional document prints an /add-project or /add-team the command refuses"
   judge "every documented /add-project and /add-team invocation is one that runs" "$(scan_docs)"
 
-  section "B. the tracked teammate definitions match what /sync-roster generates"
+  section "B. the SHIPPED teammate definitions (the committed blobs) match what /sync-roster generates"
   judge "no generated .claude/agents file is orphaned, missing, or stale" "$(scan_agents)"
 
   section "C. the RELEASED roster (the committed blob, not your working tree) ships no project squad"
@@ -459,10 +515,12 @@ stage_root() { # -> echoes the staged root
   cp -R "$REPO/skills" "$d/skills"
   [[ -d "$REPO/.claude/commands" ]] && cp -R "$REPO/.claude/commands" "$d/.claude/commands"
   cp -R "$REPO/.claude/agents" "$d/.claude/agents"
-  # Case C reads the COMMITTED blob, so the staged root has to be a real checkout or the case can
-  # only ever report N/A and its mutation would prove nothing. Committing here also keeps the A/B
-  # mutations honest: they edit the working tree AFTER this returns, so they redden their own file-
-  # reading cases while leaving C's committed blob pristine.
+  # Cases B, C and D read COMMITTED blobs, so the staged root has to be a real checkout or they can
+  # only ever report N/A and their mutations would prove nothing. It also splits the mutation set in
+  # two on purpose: a mutation that COMMITS is a change to what the repo distributes and must go
+  # red, while one that only edits the working tree is a user customising an install and must stay
+  # green. Group A still reads files off disk (it judges documents, which have no shipped/local
+  # distinction), so its mutations do not commit.
   git -C "$d" init -q -b main 2>/dev/null || git -C "$d" init -q
   git -C "$d" add -A
   git -C "$d" -c user.name=judge -c user.email=judge@invalid commit -q -m "staged release copy"
@@ -479,7 +537,7 @@ self_test() {
     return 3
   fi
   printf '=== --self-test: break ONE release invariant at a time ===\n'
-  local rc=0 d out
+  local rc=0 d out victim
 
   # A: put the exact v0.5.0 line back into the README copy.
   d="$(stage_root)"
@@ -522,26 +580,66 @@ self_test() {
   fi
   rm -rf "$d"
 
-  # B: leave behind a generated definition for a role the roster does not have — exactly the shape
-  # v0.5.0 shipped.
+  # B: SHIP a generated definition for a role the roster does not have — exactly the shape v0.5.0
+  # shipped. Committed, because "ship" is what the case is about: an orphan sitting only in a
+  # working tree is a local leftover, and reddening on it is what made B report on the reader's
+  # progress through the README instead of on the release.
   d="$(stage_root)"
   cp "$(ls "$d/.claude/agents/"*.md | head -1)" "$d/.claude/agents/ghost_dev.md"
+  git -C "$d" add -A
+  git -C "$d" -c user.name=judge -c user.email=judge@invalid commit -qm "ship an orphaned definition"
   out="$(STANDUP_RELEASE_ROOT="$d" bash "$0" 2>&1)"
-  if grep -q "orphaned, missing, or stale → FAIL" <<<"$out"; then
-    printf '  %-46s → correctly went RED\n' "agents-orphan"
+  if grep -q "orphaned, missing, or stale → FAIL" <<<"$out" && grep -q "EXTRA ghost_dev.md" <<<"$out"; then
+    printf '  %-46s → correctly went RED\n' "agents-orphan-shipped"
   else
-    printf '  %-46s → ERROR  its own case stayed green\n' "agents-orphan" >&2; rc=3
+    printf '  %-46s → ERROR  its own case stayed green\n' "agents-orphan-shipped" >&2
+    grep -A3 "orphaned, missing, or stale" <<<"$out" >&2
+    rc=3
   fi
   rm -rf "$d"
 
-  # B again, the other direction: a role in the roster with no definition shipped.
+  # B again, the other direction: a role in the SHIPPED roster with no definition shipped.
   d="$(stage_root)"
-  rm -f "$(ls "$d/.claude/agents/"*.md | head -1)"
+  victim="$(basename "$(ls "$d/.claude/agents/"*.md | head -1)")"
+  rm -f "$d/.claude/agents/$victim"
+  git -C "$d" -c user.name=judge -c user.email=judge@invalid commit -qam "ship a roster role with no definition"
   out="$(STANDUP_RELEASE_ROOT="$d" bash "$0" 2>&1)"
-  if grep -q "orphaned, missing, or stale → FAIL" <<<"$out"; then
-    printf '  %-46s → correctly went RED\n' "agents-missing"
+  if grep -q "orphaned, missing, or stale → FAIL" <<<"$out" && grep -q "MISSING $victim" <<<"$out"; then
+    printf '  %-46s → correctly went RED\n' "agents-missing-shipped"
   else
-    printf '  %-46s → ERROR  its own case stayed green\n' "agents-missing" >&2; rc=3
+    printf '  %-46s → ERROR  its own case stayed green\n' "agents-missing-shipped" >&2
+    grep -A3 "orphaned, missing, or stale" <<<"$out" >&2
+    rc=3
+  fi
+  rm -rf "$d"
+
+  # B's control, and the half that was broken on main: README step 3 is `/add-team portal` +
+  # `/add-role` twice, step 4 is `/sync-roster`. Standing between them — roster edited, definitions
+  # not yet generated — is a legitimate state of a user's install, and it printed
+  # `MISSING portal_backend.md / MISSING portal_frontend.md  EXIT=1`. A judge that reddens on where
+  # someone has got to in the README is not judging the release.
+  d="$(stage_root)"
+  python3 - "$d/standup/team.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+data = json.load(open(p, encoding="utf-8"))
+data["teams"] = [{"id": "portal", "name": "portal squad",
+                  "review_surface": {"kind": "web", "label": "Mission Control",
+                                     "inspect": "bash standup/control/inspect_portal.sh"},
+                  "developers": [
+                      {"id": "portal_backend", "role": "Portal Dev — Backend & Jobs",
+                       "folder": "standup/portal", "active": True, "pair": "portal_frontend"},
+                      {"id": "portal_frontend", "role": "Portal Dev — Frontend",
+                       "folder": "standup/portal", "active": True, "pair": "portal_backend"}]}]
+json.dump(data, open(p, "w", encoding="utf-8"), indent=2)
+PY
+  out="$(STANDUP_RELEASE_ROOT="$d" bash "$0" 2>&1)"
+  if grep -q "orphaned, missing, or stale → PASS" <<<"$out"; then
+    printf '  %-46s → correctly stayed GREEN\n' "agents-user-mid-readme-uncommitted"
+  else
+    printf '  %-46s → ERROR  a user between README steps 3 and 4 was flagged\n' "agents-user-mid-readme-uncommitted" >&2
+    grep -A3 "orphaned, missing, or stale" <<<"$out" >&2
+    rc=3
   fi
   rm -rf "$d"
 
