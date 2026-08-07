@@ -50,7 +50,10 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="$(cd "$HERE/../../.." && pwd)"
+# Where the JUDGING TOOLS live. Normally derived from this script's own location; overridable so
+# --self-test can run a deliberately PRE-FIX copy of this file out of a temp dir and still reach
+# verify_project.py + portal/parsers. Only the self-test sets it.
+REPO="${STANDUP_RELEASE_REPO:-$(cd "$HERE/../../.." && pwd)}"
 # The tree being JUDGED. The tools doing the judging always come from $REPO — mutating the data is
 # how --self-test proves the cases have teeth; mutating the tools is what test_add_project.sh does.
 ROOT="${STANDUP_RELEASE_ROOT:-$REPO}"
@@ -58,6 +61,7 @@ VERIFY="$REPO/standup/control/verify_project.py"
 PORTAL="$REPO/standup/portal"
 
 fails=0
+nas=0      # cases that could not be ANSWERED. Not failures, and emphatically not passes.
 check() { # name ok detail
   local name="$1" ok="$2" detail="${3:-}"
   [[ "$ok" == "1" ]] || fails=$((fails + 1))
@@ -411,9 +415,13 @@ PY
 judge() { # <case name> <findings>   — empty findings = pass; otherwise print each on its own line
   local name="$1" out="$2"
   grep -q '^!!JUDGE' <<<"$out" && die_judge "$(grep '^!!JUDGE' <<<"$out")"
-  # N/A is printed, never counted. It is not a PASS: a case that could not be answered must not
-  # look like one that was.
+  # N/A is printed, never counted as a pass or a failure — but it IS tallied, because the summary
+  # line has to carry it too. `judge()` got this right from the start and `main()` did not: a
+  # tarball user (no .git, so group C is unanswerable) read a clean `all checks PASS` off a run that
+  # never asked the question. The per-case line said N/A four lines above; the last line of output
+  # is the one people quote.
   if grep -q '^!!NA' <<<"$out"; then
+    nas=$((nas + 1))
     printf '  %s → N/A  (not judged)\n' "$name"
     sed 's/^!!NA /      /' <<<"$out"
     return 0
@@ -654,6 +662,41 @@ PY
   fi
   rm -rf "$d"
 
+  # THE SUMMARY LINE. Every case above asks "did the right case go red"; this one asks whether the
+  # LAST LINE tells the truth, which is the only line most readers see. A tarball/marketplace
+  # install has no .git, so C and D are unanswerable — and the run used to end in a bare
+  # `all checks PASS`, reporting a clean bill of health on questions it never asked.
+  d="$(stage_root)"; rm -rf "$d/.git"
+  out="$(STANDUP_RELEASE_ROOT="$d" bash "$0" 2>&1)"
+  if grep -qE '^all checks PASS \([0-9]+ not judged\)$' <<<"$out" \
+     && grep -q '→ N/A' <<<"$out"; then
+    printf '  %-46s → correctly declared the unjudged\n' "summary-declares-unanswered-cases"
+  else
+    printf '  %-46s → ERROR  the summary hid an unanswered case\n' "summary-declares-unanswered-cases" >&2
+    tail -4 <<<"$out" >&2
+    rc=3
+  fi
+
+  # ...and E-03 on THAT case, because a positive assertion on output can be satisfied by output
+  # that was already correct. A PRE-FIX copy of this very script — the summary built without the
+  # unjudged suffix, which is exactly the code that shipped — must make the case above go red. The
+  # mutation targets one variable name, so it cannot drift into rewriting the logic. The copy runs
+  # out of a temp dir and is pointed back at the real tools via STANDUP_RELEASE_REPO.
+  local prefix_copy; prefix_copy="$(mktemp -d)/judge_prefix.sh"
+  sed 's/\$unjudged//g' "$0" > "$prefix_copy"
+  out="$(STANDUP_RELEASE_REPO="$REPO" STANDUP_RELEASE_ROOT="$d" bash "$prefix_copy" 2>&1)"
+  # Anchored on the SUMMARY line, not on the words: the per-case rows legitimately end in
+  # "(not judged)" too, and matching those made this control pass for the wrong reason once.
+  if grep -qE '^all checks PASS$' <<<"$out" && ! grep -qE '^all checks PASS \(' <<<"$out"; then
+    printf '  %-46s → the pre-fix copy still prints the lie\n' "summary-prefix-copy-is-caught"
+  else
+    printf '  %-46s → ERROR  the mutation did not reproduce the defect,\n' "summary-prefix-copy-is-caught" >&2
+    printf '     so the case above proves nothing. Check that the summary still uses $unjudged.\n' >&2
+    tail -4 <<<"$out" >&2
+    rc=3
+  fi
+  rm -rf "$(dirname "$prefix_copy")" "$d"
+
   # "each drove its own case red" would be a lie now: three of these deliberately plant a CORRECT
   # input and require the case to stay green. A lint only has teeth if it fires on the bad input
   # AND holds its tongue on the good one; a mutation set proves only the first half.
@@ -669,7 +712,13 @@ main() {
   esac
   printf 'release-invariants judge — read-only; judging %s\n' "$ROOT"
   run_cases
-  printf '\n%s\n' "$([[ $fails -eq 0 ]] && echo "all checks PASS" || echo "$fails check(s) FAILED")"
+  # The summary must not describe a run as clean when part of it was never judged. Exit status is
+  # deliberately UNCHANGED — N/A stays neither pass nor fail, per the reasoning above case C, and CI
+  # runs on a checkout where nothing is N/A — so this line is the only place the reader learns it.
+  # That is exactly why it has to say so.
+  local unjudged=""
+  [[ $nas -gt 0 ]] && unjudged=" ($nas not judged)"
+  printf '\n%s\n' "$([[ $fails -eq 0 ]] && echo "all checks PASS$unjudged" || echo "$fails check(s) FAILED$unjudged")"
   printf 'Run --self-test to prove each invariant can fail on its own (E-03).\n'
   [[ $fails -eq 0 ]] || exit 1
 }
