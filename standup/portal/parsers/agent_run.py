@@ -60,6 +60,7 @@ import subprocess
 from typing import Any, Dict, List, Optional
 
 from . import paths
+from .gate_check import GateConfigError, verify_gate_config
 
 # Same binary the scheduler uses; overridable for tests / alt installs.
 CLAUDE_BIN = os.environ.get("STANDUP_CLAUDE_BIN") or shutil.which("claude") or "claude"
@@ -187,6 +188,23 @@ def run_readonly(
     turns = max_turns if max_turns is not None else MAX_TURNS
     tmo = timeout_s if timeout_s is not None else JOB_TIMEOUT_S
 
+    # Layer 3 PRECONDITION — see parsers/gate_check.py. Claude Code FAILS OPEN on a
+    # hook it cannot exec (measured: nonexistent interpreter -> tool runs, zero
+    # denials, zero stderr, output indistinguishable from no hook at all). So an
+    # unrunnable gate is not a degraded gate, it is NO gate. Verify before launching
+    # and refuse rather than run the job ungated: blocked work is visible, an
+    # evaporated boundary is not.
+    try:
+        verify_gate_config(settings)
+    except GateConfigError as exc:
+        return {
+            "ok": False, "exit_code": -1, "final_text": None,
+            "num_turns": None, "duration_ms": None, "is_error": True,
+            "permission_denials": [], "denied_tools": [],
+            "session_id": None, "stderr_tail": "", "settings": settings,
+            "error": f"REFUSING TO LAUNCH an ungated read-only job — gate config unusable: {exc}",
+        }
+
     cmd = [
         binexe, "-p",
         "--output-format", "json",
@@ -292,6 +310,21 @@ def run_code_task(
     settings = settings_path or str(paths.job_code_gate())
     empty_mcp = str(paths.job_empty_mcp())
     wt = os.path.realpath(worktree)
+
+    # Layer 3 PRECONDITION — identical reasoning to run_readonly (parsers/gate_check.py).
+    # Higher stakes here: this gate is what confines READS and WRITES to the worktree,
+    # so a silently-absent one means an agent that can read ~/.ssh and launder it into
+    # the committed diff. Refuse.
+    try:
+        verify_gate_config(settings)
+    except GateConfigError as exc:
+        return {
+            "ok": False, "exit_code": -1, "final_text": None, "num_turns": None,
+            "duration_ms": None, "is_error": True, "permission_denials": [],
+            "denied_tools": [], "session_id": None, "stderr_tail": "",
+            "settings": settings, "gate": "code_task", "worktree": wt,
+            "error": f"REFUSING TO LAUNCH an ungated code task — gate config unusable: {exc}",
+        }
     turns = max_turns if max_turns is not None else CODE_TASK_MAX_TURNS
     tmo = timeout_s if timeout_s is not None else CODE_TASK_TIMEOUT_S
 

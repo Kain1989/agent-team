@@ -16,26 +16,29 @@ if str(PORTAL_ROOT) not in sys.path:
 
 @pytest.fixture(scope="session", autouse=True)
 def _ensure_gate_configs():
-    """Generate control/job_*_gate.json from their .template files if absent.
+    """(Re)generate control/job_*_gate.json from their .template files when UNUSABLE.
 
     setup.sh does this on a real install (baking in the host's python + control dir);
     CI and a fresh checkout don't run setup.sh, so the gate-config files (gitignored,
     since they hold machine-specific paths) are missing and the gate tests — plus any
     code path that opens the --settings file — fail with FileNotFoundError. We generate
-    them here so the suite is hermetic. Idempotent (only when absent); RUNTIME stays
-    strict — we never fall back to the placeholder template when actually launching a job.
+    them here so the suite is hermetic. RUNTIME stays strict — we never fall back to the
+    placeholder template when actually launching a job.
+
+    The trigger is HEALTH, not existence. This used to be `if not j.exists()`, which is
+    idempotent but never looks inside the file it keeps — so a config that exists while
+    naming a DEAD interpreter (a venv deleted since setup.sh ran, an uninstalled system
+    python, a torn-down CI env) was never repaired. That matters because Claude Code
+    FAILS OPEN on a hook it cannot exec: the gate does not degrade, it silently
+    disappears. "There is a config" was standing in for "the config works".
     """
+    from parsers.gate_check import repair_gate_config
+
     control = PORTAL_ROOT.parent / "control"
     for name in ("job_code_gate", "job_readonly_gate"):
-        j = control / f"{name}.json"
-        tmpl = control / f"{name}.json.template"
-        if not j.exists() and tmpl.exists():
-            j.write_text(
-                tmpl.read_text(encoding="utf-8")
-                .replace("__PYTHON__", sys.executable)
-                .replace("__CONTROL_DIR__", str(control)),
-                encoding="utf-8",
-            )
+        repair_gate_config(control / f"{name}.json",
+                           control / f"{name}.json.template",
+                           sys.executable)
     yield
 
 
