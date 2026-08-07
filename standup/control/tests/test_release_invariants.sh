@@ -262,6 +262,152 @@ for t in (data.get("teams") or []):
 PY
 }
 
+# --------------------------------------------------------------------------------------------
+# D. the off-disk mock in static/app.js carries every staff role the RELEASED roster declares.
+#
+# `static/app.js` embeds a MOCK_STATUS the page renders when no fetch has ever succeeded. It is a
+# RENDERING FIXTURE, not sample copy — app.js's own comment records why: the staff section once
+# broke on REAL data because the mock carried SHORT role strings while the live API emits the long
+# roster strings from team.json, and the break was invisible until a user hit it.
+# `portal/tests/test_static_mock.py` pins the resulting length distribution to a floor.
+#
+# A floor cannot see an ABSENCE. The mock shipped three staff while the roster declared four:
+# `product_qa` was missing, and its note — 702 chars, 3.5x the mock's next-longest string — is the
+# longest string the live payload can produce. So the fixture whose entire purpose is "a short mock
+# can never again hide a long-string layout break" did not contain the longest string it was
+# standing in for, and every length metric read healthy the whole time. The floor was pointed at
+# the strings that were there; nothing was pointed at the one that was not.
+#
+# Set EQUALITY, not a superset either way: a roster role missing from the mock is the bug above, and
+# a mock role the roster does not declare is a card for an agent that does not exist. INACTIVE staff
+# count (comms_triage ships `active:false`): `active` is a per-install toggle, and the mock must
+# carry comms_triage regardless because `renderCommsStreams()` only runs inside its card — keying
+# the fixture on a flag would delete the comms rendering path the moment someone flipped it.
+#
+# Judged against the COMMITTED blobs, like C and B, and for C's exact reason: `/add-role --staff`
+# adds to `staff[]`, so a user who has run it has a roster the shipped mock legitimately does not
+# match. Asserting this in the pytest suite against the live team.json would redden the factory
+# suite for that user — cf8ae07's defect, in a new file.
+# --------------------------------------------------------------------------------------------
+scan_mock_staff() { # -> prints one line per staff id that is in one side and not the other
+  ROOT="$ROOT" python3 <<'PY'
+import json, os, re, subprocess
+
+root = os.environ["ROOT"]
+ROSTER, APPJS = "standup/team.json", "standup/portal/static/app.js"
+
+
+def blob(rel):
+    """The COMMITTED content of `rel`, or (None, why-not)."""
+    try:
+        p = subprocess.run(["git", "-C", root, "show", "HEAD:" + rel],
+                           capture_output=True, text=True)
+    except OSError as exc:
+        return None, "git is not runnable here (%s), so the released files cannot be read" % exc
+    if p.returncode != 0:
+        return None, ("%s has no committed %s (not a git checkout?) — this case judges what the "
+                      "repo DISTRIBUTES, and only a checkout can answer that" % (root, rel))
+    return p.stdout, None
+
+
+def mock_staff_ids(block):
+    """Every `id:` value in `block`, skipping comments and string contents.
+
+    A bare regex is wrong here on purpose: the block's `note` strings are long English prose,
+    and one containing the characters `id: "x"` would be read as a fourth staff member. Scanning
+    with string/comment awareness also means a reordered entry (`{ role: ..., id: ... }`) still
+    resolves, which a `\\{\\s*id:` anchor would silently miss and report as MISSING.
+    """
+    ids, i, n = [], 0, len(block)
+    while i < n:
+        c = block[i]
+        if c == "/" and i + 1 < n and block[i + 1] == "/":
+            j = block.find("\n", i); i = n if j < 0 else j + 1; continue
+        if c == "/" and i + 1 < n and block[i + 1] == "*":
+            j = block.find("*/", i + 2); i = n if j < 0 else j + 2; continue
+        if c in "\"'`":
+            j = i + 1
+            while j < n:
+                if block[j] == "\\":
+                    j += 2; continue
+                if block[j] == c:
+                    break
+                j += 1
+            i = j + 1
+            continue
+        if block.startswith("id:", i) and not (i and (block[i - 1].isalnum() or block[i - 1] in "_$")):
+            j = i + 3
+            while j < n and block[j] in " \t":
+                j += 1
+            if j < n and block[j] in "\"'":
+                quote, k, buf = block[j], j + 1, []
+                while k < n and block[k] != quote:
+                    if block[k] == "\\":
+                        buf.append(block[k + 1]); k += 2; continue
+                    buf.append(block[k]); k += 1
+                ids.append("".join(buf))
+                i = k + 1
+                continue
+        i += 1
+    return ids
+
+
+roster_src, why = blob(ROSTER)
+if why:
+    print("!!NA " + why); raise SystemExit(0)
+app_src, why = blob(APPJS)
+if why:
+    print("!!NA " + why); raise SystemExit(0)
+
+try:
+    data = json.loads(roster_src)
+except json.JSONDecodeError as exc:
+    print("the committed %s is not valid JSON (%s) — the release ships a roster nothing can load"
+          % (ROSTER, exc))
+    raise SystemExit(0)
+roster_ids = [s.get("id") for s in (data.get("staff") or []) if s.get("id")]
+
+start, end = app_src.find("const MOCK_STATUS = {"), app_src.find("// ---- in-memory state")
+if start < 0 or end <= start:
+    print("!!JUDGE cannot locate the embedded mock block in %s — the judge is broken, not the "
+          "page; repair the markers rather than deleting the check" % APPJS)
+    raise SystemExit(0)
+region = app_src[start:end]
+m = re.search(r"(?<![A-Za-z0-9_$])staff:\s*\[", region)
+if not m:
+    print("!!JUDGE the embedded mock in %s declares no staff[] — the judge cannot answer" % APPJS)
+    raise SystemExit(0)
+open_at, depth, close_at = m.end() - 1, 0, -1
+for j in range(open_at, len(region)):
+    if region[j] == "[":
+        depth += 1
+    elif region[j] == "]":
+        depth -= 1
+        if depth == 0:
+            close_at = j
+            break
+if close_at < 0:
+    print("!!JUDGE the mock's staff[] bracket never closes inside the mock block in %s" % APPJS)
+    raise SystemExit(0)
+mock_ids = mock_staff_ids(region[open_at:close_at + 1])
+
+for sid in sorted(set(mock_ids)):
+    if mock_ids.count(sid) > 1:
+        print("DUPLICATE %s — the mock lists this staff id %d times; the page would render two "
+              "cards for one agent" % (sid, mock_ids.count(sid)))
+for sid in sorted(set(roster_ids) - set(mock_ids)):
+    print("MISSING %s — the released roster declares this staff role and the off-disk mock does "
+          "not carry it. The mock is a RENDERING FIXTURE: whatever it omits, opening the page off "
+          "disk never renders, so a layout break that only that role's strings can cause stays "
+          "invisible until a user hits it on live data. That is the exact incident recorded above "
+          "MOCK_STATUS in app.js." % sid)
+for sid in sorted(set(mock_ids) - set(roster_ids)):
+    print("EXTRA %s — the mock renders a staff card for a role the released roster does not "
+          "declare, so the first screen a user sees names an agent this install does not have "
+          "(the shape db5ba38 fixed for demo_squad)." % sid)
+PY
+}
+
 judge() { # <case name> <findings>   — empty findings = pass; otherwise print each on its own line
   local name="$1" out="$2"
   grep -q '^!!JUDGE' <<<"$out" && die_judge "$(grep '^!!JUDGE' <<<"$out")"
@@ -285,6 +431,9 @@ run_cases() {
 
   section "C. the RELEASED roster (the committed blob, not your working tree) ships no project squad"
   judge "the roster this repo distributes declares no project squad" "$(scan_shipped_roster)"
+
+  section "D. the off-disk mock in static/app.js carries exactly the RELEASED roster's staff"
+  judge "the shipped mock's staff ids equal the shipped roster's staff ids" "$(scan_mock_staff)"
 }
 
 # Stage the DATA the judge reads into a throwaway root, so a mutation never touches the real tree.
@@ -296,6 +445,8 @@ stage_root() { # -> echoes the staged root
     [[ -f "$REPO/$f" ]] && cp "$REPO/$f" "$d/$f"
   done
   cp "$REPO/standup/team.json" "$d/standup/team.json"
+  mkdir -p "$d/standup/portal/static"
+  cp "$REPO/standup/portal/static/app.js" "$d/standup/portal/static/app.js"   # case D reads this
   cp "$REPO/hooks/supervisor_gate.py" "$d/hooks/"
   cp -R "$REPO/skills" "$d/skills"
   [[ -d "$REPO/.claude/commands" ]] && cp -R "$REPO/.claude/commands" "$d/.claude/commands"
@@ -432,10 +583,81 @@ PY
   fi
   rm -rf "$d"
 
-  # "each drove its own case red" would be a lie now: two of these deliberately plant a CORRECT
+  # D: COMMIT a staff role the mock does not carry — the exact shape `product_qa` shipped in. The
+  # length floor in portal/tests/test_static_mock.py stays green through this mutation, which is
+  # the point of the case existing separately: a floor measures the strings that ARE there.
+  d="$(stage_root)"
+  python3 - "$d/standup/team.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+data = json.load(open(p, encoding="utf-8"))
+data.setdefault("staff", []).append(
+    {"id": "release_qa", "role": "Release QA — a staff role the mock never heard of",
+     "active": True, "note": "a" * 400})
+json.dump(data, open(p, "w", encoding="utf-8"), indent=2)
+PY
+  git -C "$d" -c user.name=judge -c user.email=judge@invalid commit -qam "add a staff role, forget the mock"
+  out="$(STANDUP_RELEASE_ROOT="$d" bash "$0" 2>&1)"
+  if grep -q "equal the shipped roster's staff ids → FAIL" <<<"$out" \
+     && grep -q "MISSING release_qa" <<<"$out"; then
+    printf '  %-46s → correctly went RED\n' "mock-missing-a-roster-staff"
+  else
+    printf '  %-46s → ERROR  its own case stayed green\n' "mock-missing-a-roster-staff" >&2
+    grep -A3 "equal the shipped roster's staff ids" <<<"$out" >&2
+    rc=3
+  fi
+  rm -rf "$d"
+
+  # D, the other direction: a mock card for a role the release does not declare — the demo_squad
+  # shape db5ba38 fixed, which was noticed by a human rather than caught by anything.
+  d="$(stage_root)"
+  python3 - "$d/standup/portal/static/app.js" <<'PY'
+import sys
+p = sys.argv[1]
+src = open(p, encoding="utf-8").read()
+anchor = '    staff: ['
+assert anchor in src, "the mock's staff[] anchor moved; this mutation needs updating"
+src = src.replace(anchor, anchor + '\n      { id: "ghost_lead", role: "Ghost Lead", note: "not in any roster" },', 1)
+open(p, "w", encoding="utf-8").write(src)
+PY
+  git -C "$d" -c user.name=judge -c user.email=judge@invalid commit -qam "ship a mock card for a role nobody declares"
+  out="$(STANDUP_RELEASE_ROOT="$d" bash "$0" 2>&1)"
+  if grep -q "equal the shipped roster's staff ids → FAIL" <<<"$out" \
+     && grep -q "EXTRA ghost_lead" <<<"$out"; then
+    printf '  %-46s → correctly went RED\n' "mock-names-a-role-nobody-declares"
+  else
+    printf '  %-46s → ERROR  its own case stayed green\n' "mock-names-a-role-nobody-declares" >&2
+    grep -A3 "equal the shipped roster's staff ids" <<<"$out" >&2
+    rc=3
+  fi
+  rm -rf "$d"
+
+  # D's control — the same half C needs, for the same reason. `/add-role --staff` writes to
+  # `staff[]`, so a user who has run it has a roster the shipped mock legitimately does not match.
+  # That must stay GREEN, or this case is cf8ae07's defect wearing a new filename.
+  d="$(stage_root)"
+  python3 - "$d/standup/team.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+data = json.load(open(p, encoding="utf-8"))
+data.setdefault("staff", []).append(
+    {"id": "my_own_analyst", "role": "Analyst I added with /add-role --staff", "active": True})
+json.dump(data, open(p, "w", encoding="utf-8"), indent=2)
+PY
+  out="$(STANDUP_RELEASE_ROOT="$d" bash "$0" 2>&1)"
+  if grep -q "equal the shipped roster's staff ids → PASS" <<<"$out"; then
+    printf '  %-46s → correctly stayed GREEN\n' "mock-vs-user-added-staff-uncommitted"
+  else
+    printf '  %-46s → ERROR  a user running /add-role --staff was flagged\n' "mock-vs-user-added-staff-uncommitted" >&2
+    grep -A3 "equal the shipped roster's staff ids" <<<"$out" >&2
+    rc=3
+  fi
+  rm -rf "$d"
+
+  # "each drove its own case red" would be a lie now: three of these deliberately plant a CORRECT
   # input and require the case to stay green. A lint only has teeth if it fires on the bad input
   # AND holds its tongue on the good one; a mutation set proves only the first half.
-  [[ $rc -eq 0 ]] && printf '\n--self-test → PASS  (each planted defect reddened its OWN case; both well-formed controls stayed green)\n'
+  [[ $rc -eq 0 ]] && printf '\n--self-test → PASS  (each planted defect reddened its OWN case; every well-formed control stayed green)\n'
   return $rc
 }
 

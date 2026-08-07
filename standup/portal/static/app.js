@@ -80,15 +80,24 @@
         { id: "portal_frontend", role: "Portal Dev — Mission Control UI",       pair: "portal_backend",  branch: null, health: null, current_task: "resolve rebase conflict in app.js [draft, uncommitted]", next_step: "branch: auto/standup-resolve-appjs-conflict", last_entry_date: "2026-06-22", last_entry: { date: "2026-06-22", title: "rebase conflict" } }
       ]}
     ],
-    // Staff: the MVP's lean staff — a Steve-Jobs-grounded pm_agent, one Apple-HIG
-    // design_lead, and the (off-by-default) comms_triage. comms_triage MUST be
-    // present and carry the comms.streams shape (renderCommsStreams only runs inside
-    // its card). Roles stay descriptive so the off-disk mock still exercises the
-    // multi-line role wrapping the live roster strings hit.
+    // Staff: EVERY staff id in standup/team.json, and that completeness is now a test
+    // (`test_static_mock.py::test_mock_staff_matches_the_shipped_roster`), not a habit.
+    // comms_triage MUST be present and carry the comms.streams shape (renderCommsStreams
+    // only runs inside its card). Roles stay descriptive so the off-disk mock still
+    // exercises the multi-line role wrapping the live roster strings hit.
+    //
+    // product_qa was ABSENT here from the day it was added to the roster, and it carries
+    // the roster's LONGEST note — 702 chars, 3.5x the next longest string in this mock.
+    // The entire reason this mock is a fixture (see the HARD LESSON above) is that a short
+    // mock string once hid a layout break that a long live string caused; the single
+    // longest string the live payload can produce had therefore never appeared in the
+    // fixture standing in for it. Its note is copied VERBATIM from team.json — shortening
+    // it to fit the card is the exact edit the length floor exists to stop.
     staff: [
       { id: "comms_triage", role: "Comms Triage — Local Intake & Routing (optional, off by default in the MVP)",  note: "reads a local messages/inbox/ folder; routed items appear on the EM board tagged source=comms" },
       { id: "pm_agent",     role: "Product Manager Agent (Steve Jobs-grounded scope + say-no + board)",            note: "joins INTAKE + the DESIGN challenge; the board reflects its keep/kill calls" },
-      { id: "design_lead",  role: "Design Lead — Clarity & Craft (Apple HIG-grounded)",                            note: "runs a light design read every tick + a full critique on the morning design tick (args.design); no shipped squad owns standup/portal, so its findings land on the board for a human, not on a developer" }
+      { id: "design_lead",  role: "Design Lead — Clarity & Craft (Apple HIG-grounded)",                            note: "runs a light design read every tick + a full critique on the morning design tick (args.design); no shipped squad owns standup/portal, so its findings land on the board for a human, not on a developer" },
+      { id: "product_qa",   role: "Product QA — user-perspective acceptance (actually uses the product every tick)", note: "Added 0.3.6. A real company catches obvious product problems because developers, the supervisor, QA and reviewers all USE the product every day — a team of many agents caught nothing because no role did. The existing lines of defense do not hold: developers were scoped to their own lane, reviewers only read the diff, the design lead judges expert standards not usability, the PM judges keep/kill not 'is it usable'. product_qa is the one role whose whole job is to USE the product as a user and report. needs_bash (not git) is a hard requirement: its job IS to operate the product (Playwright/curl); a QA that cannot operate the product is just another code reviewer, and this team already has those." }
     ],
     // comms = 1 agent (comms_triage), 3 streams: MESSAGE / EMAIL / MEETING, each
     // read from local sample files under messages/inbox/. Each carries a count +
