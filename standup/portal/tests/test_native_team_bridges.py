@@ -71,6 +71,57 @@ def test_agents_gen_prunes_stale_but_keeps_handwritten(tmp_path):
     assert hand.exists()                      # hand-written -> kept
 
 
+def test_agents_gen_refuses_an_id_that_is_not_a_filename(tmp_path):
+    """A role id becomes a FILENAME, so a `/` in one is not a cosmetic problem.
+
+    Measured on a fixture roster whose squad id was `standup/portal`: `generate()` raised
+    `FileNotFoundError: .../.claude/agents/standup/portal_a.md` — a directory that does not exist.
+    /sync-roster is the `NEXT — required` step /add-project prints, so this is the first command a
+    user runs after adding such a project, and the traceback names a path, not the roster field
+    that caused it.
+
+    `..` is the same defect with a worse ending: the write lands OUTSIDE the output directory.
+    """
+    import pytest
+
+    from parsers import agents_gen
+    for n, bad in enumerate(("standup/portal_a", "../escape", "with\\backslash", "..")):
+        data = _roster()
+        data["teams"][0]["developers"][0]["id"] = bad
+        tj = tmp_path / "team.json"
+        tj.write_text(json.dumps(data), encoding="utf-8")
+        out = tmp_path / ("agents-%d" % n)
+        with pytest.raises(ValueError) as exc:
+            agents_gen.generate(tj, out)
+        msg = str(exc.value)
+        assert repr(bad) in msg, msg                 # names the offending value, quoted
+        assert "team.json" in msg, msg               # and the file to fix it in
+        assert "id" in msg, msg                      # and the field
+        # ATOMIC: nothing at all was written, so a half-synced .claude/agents/ cannot be left
+        # behind for /team to spawn from.
+        assert not out.exists() or not list(out.glob("*.md")), sorted(out.glob("*.md"))
+
+
+def test_agents_gen_still_accepts_a_dotted_id(tmp_path):
+    """The guard must refuse what is MEASURED to break, not what merely looks odd.
+
+    `Path("a.b.md").stem` is `"a.b"` — measured — so a dotted id round-trips through the prune
+    step intact and there is no reason to reject it. This case is here so a future tightening of
+    the guard has to argue with a test rather than with a comment.
+    """
+    from parsers import agents_gen
+    data = _roster()
+    data["teams"][0]["developers"][0]["id"] = "dev.a"
+    tj = tmp_path / "team.json"
+    tj.write_text(json.dumps(data), encoding="utf-8")
+    out = tmp_path / ".claude" / "agents"
+    written = agents_gen.generate(tj, out)
+    assert "dev.a" in written
+    assert (out / "dev.a.md").exists()
+    agents_gen.generate(tj, out)                     # a second run must not prune it
+    assert (out / "dev.a.md").exists()
+
+
 # --------------------------------------------------------------------------- (3)
 def test_native_teams_reads_teams_and_tasks(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))

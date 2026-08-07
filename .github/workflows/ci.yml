@@ -56,6 +56,19 @@ jobs:
           bash standup/control/tests/test_remove_project.sh --self-test
           bash standup/control/tests/test_remove_project.sh
 
+      - name: Governance + release judges
+        # The supervisor gate had NO test of any kind while verify_project.py derives its
+        # management deny list from that same file's constants — a change there silently changed
+        # what /add-project refuses. The release judge covers the CONTENT of the release rather
+        # than its behaviour (a documented command that the command refuses; tracked teammate
+        # definitions that /sync-roster would prune); both shipped broken in 0.5.0 with every
+        # other judge green.
+        run: |
+          bash standup/control/tests/test_supervisor_gate.sh --self-test
+          bash standup/control/tests/test_supervisor_gate.sh
+          bash standup/control/tests/test_release_invariants.sh --self-test
+          bash standup/control/tests/test_release_invariants.sh
+
       - name: Design judge self-test
         # DESIGN_RULEBOOK E-03: prove the judge FAILS on deliberately broken UI. A design gate
         # that has never been shown to fail is not a gate — every verdict it gives is unreliable.

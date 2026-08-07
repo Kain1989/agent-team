@@ -172,7 +172,7 @@ lock only works if every writer holds it.
 | `standup/log/<date>.md` — `parsers/log.py:143` | `control/requests/` and `control/results/` — `parsers/actions.py:576`, `:608` |
 | `<folder>/.standup/<dev>.md` — `parsers/devlog.py:88` | `control/control.log` and `control/notifications.log` — `parsers/actions.py:195`, `parsers/notify.py:31` |
 | | `control/worktrees/<job-id>/` — `parsers/worktree.py:154` runs `git worktree add`, destination from `parsers/jobworker.py:306` |
-| | `.claude/agents/<role>.md` — `parsers/agents_gen.py:105`, output directory at `:132` |
+| | `.claude/agents/<role>.md` — `parsers/agents_gen.py:166`, output directory at `:193` |
 
 Every non-test reference to a left-column file was resolved one by one. All but one are reads.
 The exception is neither: `parsers/scheduler.py:240` names the daily log, and
@@ -223,7 +223,7 @@ list, a peer mailbox. Four bridges connect them to this system's governance.
 
 | bridge | what it does | file |
 |---|---|---|
-| Roster becomes teammates | `/sync-roster` generates a definition for every active developer and staff role, and prunes definitions no longer in the roster | `standup/portal/parsers/agents_gen.py:98`, `:101` filter on `active`; `:105` writes; `:110-113` prunes |
+| Roster becomes teammates | `/sync-roster` generates a definition for every active developer and staff role, and prunes definitions no longer in the roster | `standup/portal/parsers/agents_gen.py:139`, `:141` filter on `active`; `:151-162` refuses an id that is not a filename; `:166` writes; `:171-174` prunes |
 | Governance on the task lifecycle | `TaskCreated`, `TaskCompleted` and `TeammateIdle` hooks put the same guardrails and kill switch on native tasks | `hooks/hooks.json` |
 | The portal observes | `GET /api/native-teams` summarizes live native teams alongside the job queue | `standup/portal/app.py:731` |
 | `/team` dispatches | the roster spawns as a native team on a task | `skills/team/SKILL.md` |
