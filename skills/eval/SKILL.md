@@ -9,8 +9,8 @@ Run the regression eval suite.
 0. **Resolve which cases can run here** — `python3 evals/resolve_cases.py`. It reads
    `evals/cases.json` (a default `target` + a list of `cases`, each with `id`, `prompt`, `check`,
    and a `requires` directory) and prints a RUN/SKIP plan with a reason per case. **Do not make
-   this judgement yourself.** `demo-app` is an optional sample; when it has been deleted, its
-   cases must SKIP with the reason stated, and a skip is **never** a pass. If the plan is `0
+   this judgement yourself.** A case whose target is not in this checkout must SKIP with the reason stated, and a skip is
+   **never** a pass. If the plan is `0
    runnable`, print its explanation and stop — that is a complete, correct answer, not a failure.
    Exit 1 means the gold-set itself is broken (malformed, or a case missing a field); report that
    verbatim rather than working around it.

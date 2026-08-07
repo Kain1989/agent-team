@@ -38,7 +38,30 @@ const ROOT = path.resolve(__dirname, '../..');            // standup/
 const REPO = path.resolve(ROOT, '..');                    // repo root
 const ENGINE = path.join(ROOT, 'standup.workflow.js');
 
-const roster = JSON.parse(fs.readFileSync(path.join(ROOT, 'team.json'), 'utf8'));
+// A FIXTURE roster, not the shipped one. standup/team.json now ships with `teams: []` on purpose —
+// a fresh install has no project until /add-project creates one — so a judge that read it would be
+// testing an empty roster and every routing case would be vacuous. The engine's behaviour on an
+// empty roster is covered separately in group C4.
+const roster = {
+  teams: [{
+    id: 'portal', name: 'Team Portal Squad',
+    mission: 'Owns the local Mission Control portal.',
+    coordination: 'Two paired developer-agents who critique each other in fresh context.',
+    review_surface: { kind: 'web', label: 'Mission Control (local)', url: 'http://127.0.0.1:8770',
+      inspect: 'bash standup/control/inspect_portal.sh', how: 'Run from the project root.' },
+    developers: [
+      { id: 'portal_backend', folder: 'standup/portal', role: 'Backend', git: true, active: true,
+        pair: 'portal_frontend', focus: 'the read+job API', tests: 'pytest' },
+      { id: 'portal_frontend', folder: 'standup/portal', role: 'Frontend', git: true, active: true,
+        pair: 'portal_backend', focus: 'the single-window page', tests: 'the API contract tests' },
+    ],
+  }],
+  staff: [{ id: 'pm_agent', folder: 'standup', role: 'Product Manager Agent', git: false, active: true,
+            focus: 'owns the board, says no' }],
+};
+// The SHIPPED roster, read for the one case that is about the canonical policy rather than about
+// routing. Its `teams` is empty by design; `manager.policy` is the part that must stay true.
+const shipped = JSON.parse(fs.readFileSync(path.join(ROOT, 'team.json'), 'utf8'));
 const engineSrc = fs.readFileSync(ENGINE, 'utf8').replace(/^\s*export\s+const\s+meta\s*=/m, 'const meta =');
 
 // ---------- verdict vocabulary (F-01: a verdict is a WORD, never a glyph alone; F-04: `→`
@@ -97,7 +120,7 @@ function host(reply) {
   return { rec, hooks: h };
 }
 
-const TASK = { task: 'add a helper to textkit', assignee: 'dev_a', priority: 'P1', effort: 'S' };
+const TASK = { task: 'add a status endpoint to the portal', assignee: 'portal_backend', priority: 'P1', effort: 'S' };
 // Reaching INVESTIGATE proves INTAKE was passed, not skipped: it is the step immediately after.
 const STOP_AT_INVESTIGATE = 'SENTINEL-REACHED-INVESTIGATE';
 const okContract = { goal: 'g', acceptance: ['a'], verification: 'v', priority: 'P1', out_of_scope: [] };
@@ -107,7 +130,7 @@ const okContract = { goal: 'g', acceptance: ['a'], verification: 'v', priority: 
 const boardReply = (assignee, extra) => ({
   summary: 's', team_health: 'green', blockers: [],
   todays_board: [Object.assign({
-    team: 'demo_squad', project: 'demo-app', task: 'add a helper to textkit',
+    team: 'portal', project: 'standup/portal', task: 'add a status endpoint to the portal',
     priority: 'P1', effort: 'S', assignee, autoworkable: true,
     acceptance: 'pytest passes', serves_goal: 'NONE — smoke',
   }, extra || {})],
@@ -115,8 +138,8 @@ const boardReply = (assignee, extra) => ({
 
 // Replies for the roster-wide phases so the DEFAULT path can run to Work without real agents.
 function standupPhaseReply(label, assignee, extra) {
-  if (label.startsWith('standup:')) return { project: 'demo-app', health: 'green', done: [], next: [], blockers: [], observations: [] };
-  if (label.startsWith('sync:')) return { team: 'demo_squad', health: 'green', summary: 's', board: [], dependencies: [], blockers: [] };
+  if (label.startsWith('standup:')) return { project: 'standup/portal', health: 'green', done: [], next: [], blockers: [], observations: [] };
+  if (label.startsWith('sync:')) return { team: 'portal', health: 'green', summary: 's', board: [], dependencies: [], blockers: [] };
   if (label.startsWith('design:')) return { summary: 's', tasks: [] };
   if (label.startsWith('pulse:')) return { lens: 'l', engaged: false, observations: [] };
   if (label === 'em:synthesize') return boardReply(assignee, extra);
@@ -148,14 +171,14 @@ async function runCases(src) {
       'labels=' + rec.labels.join(','));
     check('INTAKE is supervisor-gated, not self-certified', rec.labels.includes('sup:intake'));
     check('INTAKE runs BEFORE investigate',
-      rec.labels.indexOf('intake:pm') >= 0 && rec.labels.indexOf('intake:pm') < rec.labels.indexOf('investigate:dev_a'));
+      rec.labels.indexOf('intake:pm') >= 0 && rec.labels.indexOf('intake:pm') < rec.labels.indexOf('investigate:portal_backend'));
     check('the approved contract is handed to INVESTIGATE (not merely produced)',
       (rec.prompts.find(p => p.label.startsWith('investigate:')) || { prompt: '' }).prompt.includes('OUTCOME CONTRACT'));
     check('/work skips the roster-wide phases', !rec.phases.some(p => /Comms|Standup|Synthesize|Staff Pulse/.test(p)),
       'phases=' + rec.phases.join(','));
     check('/work still enters Work', rec.phases.includes('Work'));
     check('an approved contract lets the task PROCEED past INTAKE',
-      rec.labels.includes('investigate:dev_a') && w.status !== 'escalated-intake',
+      rec.labels.includes('investigate:portal_backend') && w.status !== 'escalated-intake',
       'status=' + w.status);
     check('mode reports the entry path taken', out && out.mode === 'work', 'mode=' + (out && out.mode));
   }
@@ -167,7 +190,7 @@ async function runCases(src) {
   section('B. INTAKE on the DEFAULT path (the board loop)');
   {
     const { rec, hooks } = host((label) => {
-      const s = standupPhaseReply(label, 'dev_a');
+      const s = standupPhaseReply(label, 'portal_backend');
       if (s !== undefined) return s;
       if (label === 'intake:pm') return okContract;
       if (label === 'sup:intake') return { approve: true, note: 'ok' };
@@ -179,9 +202,9 @@ async function runCases(src) {
     check('default path runs the roster-wide phases', rec.phases.includes('Standup') && rec.phases.includes('Synthesize'));
     check('default path reaches INTAKE too', rec.labels.includes('intake:pm'), 'labels=' + rec.labels.slice(-6).join(','));
     check('default path INTAKE precedes investigate',
-      rec.labels.indexOf('intake:pm') < rec.labels.indexOf('investigate:dev_a'));
+      rec.labels.indexOf('intake:pm') < rec.labels.indexOf('investigate:portal_backend'));
     check('default path proceeds past INTAKE on an approved contract',
-      rec.labels.includes('investigate:dev_a') && w.status !== 'escalated-intake', 'status=' + w.status);
+      rec.labels.includes('investigate:portal_backend') && w.status !== 'escalated-intake', 'status=' + w.status);
     check('mode reports the entry path taken', out && out.mode === 'standup', 'mode=' + (out && out.mode));
   }
 
@@ -307,7 +330,7 @@ async function runCases(src) {
     check('a VALID JSON string still runs (backwards compatible)', !/failed to parse/.test(goodErr), goodErr.slice(0, 60));
 
     // The real shape of the incident: a raw double-quote inside a string value.
-    const bad = '{"date":"D","task":{"task":"the owner accepted "this cost" explicitly","assignee":"dev_a"}}';
+    const bad = '{"date":"D","task":{"task":"the owner accepted "this cost" explicitly","assignee":"portal_backend"}}';
     let msg = '';
     try { await makeRunner(src, hooks)(bad); }
     catch (e) { msg = String(e.message); }
@@ -379,7 +402,7 @@ async function runCases(src) {
   const routingCases = [
     ['unknown assignee', { assignee: 'dev_typo' }, { assignee: 'dev_typo' }, /is not on the roster/, /valid assignees:/],
     ['missing assignee', { _dropAssignee: true }, { assignee: undefined }, /names no assignee/, /valid assignees:/],
-    ['folder the dev does not own', { folder: 'some/other/repo' }, { assignee: 'dev_a', folder: 'some/other/repo' }, /is not a directory/, /valid folders for dev_a:/],
+    ['folder the dev does not own', { folder: 'some/other/repo' }, { assignee: 'portal_backend', folder: 'some/other/repo' }, /is not a directory/, /valid folders for portal_backend:/],
   ];
   for (const [name, patch, boardItem, msgPat, logPat] of routingCases) {
     for (const path_ of ['work', 'standup']) {
@@ -412,7 +435,7 @@ async function runCases(src) {
     const noPair = JSON.parse(JSON.stringify(roster));
     delete noPair.teams[0].developers[0].pair;
     for (const path_ of ['work', 'standup']) {
-      const { rec, hooks } = host((label) => standupPhaseReply(label, 'dev_a'));
+      const { rec, hooks } = host((label) => standupPhaseReply(label, 'portal_backend'));
       let err = null;
       try {
         await makeRunner(src, hooks)(path_ === 'work'
@@ -422,7 +445,7 @@ async function runCases(src) {
       check(`unpaired dev rejects [${path_}]`, !!err && /declares no pair/.test(String(err.message)),
         err ? String(err.message).slice(0, 70) : '(no throw — the `|| dev` self-review fallback is back)');
       check(`unpaired dev spends no Work-phase agent [${path_}]`, !rec.labels.some(l => workLabel.test(l)));
-      check(`unpaired dev enumerates the squadmates [${path_}]`, rec.logs.some(l => /valid pairs for dev_a/.test(l)));
+      check(`unpaired dev enumerates the squadmates [${path_}]`, rec.logs.some(l => /valid pairs for portal_backend/.test(l)));
     }
     const badPair = JSON.parse(JSON.stringify(roster));
     badPair.teams[0].developers[0].pair = 'nobody_xyz';
@@ -458,7 +481,7 @@ async function runCases(src) {
       /git -C other-lib/.test(inv) || /folder other-lib/.test(inv), inv.slice(0, 0));
     const plain = await grabPrompts({});
     const invPlain = (plain.prompts.find(p => p.label.startsWith('investigate:')) || { prompt: '' }).prompt;
-    check('omitting folder falls back to the owner folder unchanged', /demo-app/.test(invPlain) && !/other-lib/.test(invPlain));
+    check('omitting folder falls back to the owner folder unchanged', /standup\/portal/.test(invPlain) && !/other-lib/.test(invPlain));
   }
 
   // ═══ G. Observability comes from the DECLARED surface, not from web vocabulary ═══
@@ -501,8 +524,8 @@ async function runCases(src) {
     const twoItemBoard = {
       summary: 's', team_health: 'green', blockers: [],
       todays_board: [
-        { team: 'demo_squad', project: 'demo-app', task: 'first', priority: 'P0', effort: 'S', assignee: 'dev_a', autoworkable: true, acceptance: 'a', serves_goal: 'g' },
-        { team: 'demo_squad', project: 'demo-app', task: 'second', priority: 'P1', effort: 'S', assignee: 'dev_b', autoworkable: true, acceptance: 'a', serves_goal: 'g' },
+        { team: 'portal', project: 'standup/portal', task: 'first', priority: 'P0', effort: 'S', assignee: 'portal_backend', autoworkable: true, acceptance: 'a', serves_goal: 'g' },
+        { team: 'portal', project: 'standup/portal', task: 'second', priority: 'P1', effort: 'S', assignee: 'portal_frontend', autoworkable: true, acceptance: 'a', serves_goal: 'g' },
       ],
     };
     // Which task is in flight is tracked from the INTAKE prompt (the supervisor prompt carries only
@@ -511,7 +534,7 @@ async function runCases(src) {
     // (-> work-error).
     let current = '';
     const { rec, hooks } = host((label, prompt) => {
-      const s = standupPhaseReply(label, 'dev_a');
+      const s = standupPhaseReply(label, 'portal_backend');
       if (label === 'em:synthesize') return twoItemBoard;
       if (s !== undefined) return s;
       if (label.startsWith('intake:pm')) {
@@ -566,8 +589,8 @@ async function runCases(src) {
     check('F-06 the engine meta prints no hardcoded lens count',
       !/\d-lens/.test((src.match(/description: '[^']*'/) || [''])[0]));
     check('F-06 the canonical SDLC list exists in the roster and starts at INTAKE',
-      Array.isArray(roster.manager.policy.sdlc_pipeline) && /^0 INTAKE/.test(roster.manager.policy.sdlc_pipeline[0]),
-      String(roster.manager.policy.sdlc_pipeline[0]).slice(0, 40));
+      Array.isArray(shipped.manager.policy.sdlc_pipeline) && /^0 INTAKE/.test(shipped.manager.policy.sdlc_pipeline[0]),
+      String(shipped.manager.policy.sdlc_pipeline[0]).slice(0, 40));
     // F-07 — an error names the valid set. Every stopTick call site must pass an enumeration that
     // is DERIVED, not literal.
     const stopCalls = src.match(/stopTick\(/g) || [];

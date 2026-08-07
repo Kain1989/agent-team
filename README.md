@@ -209,8 +209,7 @@ agent-team/
 │   └── control/        the job queue, the git-worktree lifecycle, the locked-down job gate,
 │                       verify_design_quality.js and check_workflow_parse.js
 ├── evals/              the regression gold-set + resolve_cases.py (which cases can run here)
-├── demo-app/           an OPTIONAL sample project (a small Python library) — safe to delete
-└── setup.sh            installs the portal (venv, deps, gate config, demo-app git if present)
+└── setup.sh            installs the portal (venv, deps, gate config, runtime dirs)
 ```
 
 ## The gates
@@ -323,21 +322,17 @@ the directory alone.
 
 ```bash
 cd standup/portal && ../.venv/bin/python -m pytest -q                     # the portal engine
-cd demo-app && python3 -m pytest -q                                       # the sample library
 node standup/control/verify_design_quality.js --self-test                 # the design judge can still fail
 node standup/control/check_workflow_parse.js standup/standup.workflow.js  # the engine still loads
 node standup/control/tests/test_sdlc_routing.js                           # both entry paths still reach intake
 bash standup/control/tests/test_arm_path.sh                              # the exemption is armed in THIS install, not a neighbour
-bash standup/control/tests/test_setup_guard.sh                           # the installer survives a deleted demo-app
-bash standup/control/tests/test_precondition_parity.sh                   # every doc states the demo-app precondition the same way
 bash standup/control/tests/test_eval_resolver.sh                         # /eval says which cases it skipped, and why
 bash standup/control/tests/test_add_project.sh                          # /add-project's four invariants are checkable
 bash standup/control/tests/test_remove_project.sh                       # /remove-project edits surgically and keeps your code
 ```
 
-**Eight of those take `--self-test`** — `verify_design_quality.js`, `test_sdlc_routing.js`,
-`test_setup_guard.sh`, `test_precondition_parity.sh`, `test_eval_resolver.sh`, `test_arm_path.sh`, `test_add_project.sh`,
-`test_remove_project.sh` — which deliberately
+**Six of those take `--self-test`** — `verify_design_quality.js`, `test_sdlc_routing.js`,
+`test_setup_guard.sh`, `test_eval_resolver.sh`, `test_arm_path.sh`, `test_add_project.sh`, `test_remove_project.sh` — which deliberately
 breaks the thing being judged and requires the judge to go red. Run it before trusting a green. The
 other three do not: the two pytest suites, and `check_workflow_parse.js`, which takes a **filename**
 and would read `--self-test` as one, reporting a missing file as if the engine were broken.

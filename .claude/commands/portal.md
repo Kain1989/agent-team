@@ -18,8 +18,8 @@ Start the Mission Control portal so the human can watch and manage the agent tea
 
 3. **Tell the human the URL** to open (e.g. http://127.0.0.1:8770 — or the `PORT` from `.env`).
    Explain what they'll see: the squads + dev health, the EM board, the live tick log, and the
-   **job queue** — where they can submit a code task (target `project:demo-app` if a `demo-app/`
-   exists; otherwise any developer's `folder` from `standup/team.json`), watch it run in an
+   **job queue** — where they can submit a code task (target any developer's `folder`
+   from `standup/team.json`), watch it run in an
    isolated worktree, review the diff, and **Approve** it to commit.
 
 The portal reflects the same files the team writes, so any standup you run (via `/standup`) shows

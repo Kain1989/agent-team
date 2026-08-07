@@ -7,9 +7,6 @@
 #   3. writes .env from .env.example (if absent)
 #   4. generates the two job-gate config files from their templates, baking in THIS
 #      install's absolute python + control/ paths (the gate hook command needs them)
-#   5. IF demo-app/ is present, turns it into a local git repo with a LOCAL bare `origin` (a
-#      file path — no GitHub/network) so the portal's worktree-based code-task flow runs
-#      offline. demo-app is an optional sample: deleting it skips this step, never fails.
 #   6. creates the runtime state dirs the control plane writes to
 set -euo pipefail
 
@@ -68,46 +65,6 @@ for name in ("job_code_gate", "job_readonly_gate"):
     print(f"    wrote control/{name}.json")
 PYEOF
 
-# --- 5. demo-app: local git + local bare origin (offline) ---------------------
-# demo-app/ is a SAMPLE, and deleting it once you have your own repo is a supported path — the
-# README says so. This whole section is therefore conditional on it still being there. It did not
-# used to be: under `set -euo pipefail`, `git -C "$ROOT/demo-app" init` on a deleted directory is
-# `fatal: cannot change to .../demo-app` and exit 128, which aborted the installer with nothing
-# installed. Note the guard opens AFTER the two assignments: `set -u` makes a $DEMO referenced
-# outside its own guarded block an unbound-variable abort, which is the same closed door one line
-# further down. Judge: standup/control/tests/test_setup_guard.sh
-DEMO="$ROOT/demo-app"
-ORIGIN="$ROOT/.demo-app-origin.git"
-if [[ -d "$DEMO" ]]; then
-  if [[ ! -d "$DEMO/.git" ]]; then
-    echo "==> git-init demo-app + a LOCAL bare origin (offline, no network)"
-    git -C "$DEMO" init -q -b main
-    git -C "$DEMO" add -A
-    # --allow-empty: an EMPTY demo-app/ (or one whose files are all ignored) stages nothing, and a
-    # commit with nothing staged exits 1 — which under `set -e` aborts the installer just as surely
-    # as the missing directory did. With content it behaves exactly as before; without, it still
-    # creates `main` so the push below and the worktree flow's origin/main resolution both work.
-    git -C "$DEMO" -c user.name="demo" -c user.email="demo@local" commit -q --allow-empty -m "demo-app: initial import"
-  fi
-  if [[ ! -d "$ORIGIN" ]]; then
-    git init -q --bare -b main "$ORIGIN" 2>/dev/null || git init -q --bare "$ORIGIN"
-  fi
-  # (re)point origin at the local bare repo + push main so origin/main resolves
-  if git -C "$DEMO" remote | grep -qx origin; then
-    git -C "$DEMO" remote set-url origin "$ORIGIN"
-  else
-    git -C "$DEMO" remote add origin "$ORIGIN"
-  fi
-  git -C "$DEMO" push -q -u origin main
-  # point origin's HEAD at main so the worktree flow resolves origin/main (a local bare
-  # repo created without -b main may otherwise default HEAD to master and break resolution)
-  git -C "$ORIGIN" symbolic-ref HEAD refs/heads/main 2>/dev/null || true
-  git -C "$DEMO" remote set-head origin main >/dev/null 2>&1 || true
-else
-  echo "==> no demo-app/ here — skipping the sample repo setup (this is fine)"
-  echo "    demo-app is an optional sample. Everything else above is installed."
-fi
-
 # --- 6. runtime state dirs ----------------------------------------------------
 mkdir -p "$CONTROL/runs" "$CONTROL/requests" "$CONTROL/results" "$CONTROL/worktrees"
 mkdir -p "$ENG/log" "$ENG/portal/.standup"
@@ -115,9 +72,5 @@ mkdir -p "$ENG/log" "$ENG/portal/.standup"
 echo ""
 echo "==> done. start the portal:"
 echo "      cd standup/portal && ./run_local.sh"
-if [[ -d "$DEMO" ]]; then
-  echo "    then open http://127.0.0.1:8770 and submit a code task targeting 'project:demo-app'."
-else
-  echo "    then open http://127.0.0.1:8770 and submit a code task targeting one of the"
-  echo "    projects in standup/team.json (a developer's 'folder')."
-fi
+echo "    then open http://127.0.0.1:8770. There is no project yet — add one with"
+echo "      /add-project clone <git-url>   |   new <name>   |   adopt <name>" 

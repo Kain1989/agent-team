@@ -27,6 +27,7 @@ Exit codes: 0 all invariants hold · 1 one or more failed · 2 usage / unreadabl
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
 import re
@@ -190,6 +191,32 @@ def has_origin(dirpath):
     return rc == 0 and "origin" in out.split()
 
 
+# Filename patterns that mean "this should not be in a git history". Names, not contents: measured
+# against the plugin's own scanner, `DB_PASSWORD=hunter2`, `API_KEY=…`, `DATABASE_URL=postgres://…`
+# and even `PASSWORD="hunter2"` are ALL missed — only prefixed tokens (AKIA…, ghp_…) match. Unquoted
+# KEY=value is what a real dotenv looks like, and a dotenv is exactly what an adopted folder carries.
+SECRET_NAME_PATTERNS = (".env", ".env.*", "*.pem", "*.key", "id_rsa", "id_dsa",
+                        "*.p12", "*.pfx", "*.keystore", "credentials.json", ".netrc")
+
+
+def committed_secret_files(dirpath):
+    """Files matching SECRET_NAME_PATTERNS that are IN the project's HEAD tree.
+
+    The refusal in /add-project is a prompt instruction; this is the executable half, so the rule
+    can be judged and cannot quietly stop being followed. Reads the committed tree rather than the
+    working directory: an ignored-but-present .env is fine, a committed one is not.
+    """
+    rc, out = _git(dirpath, "ls-tree", "-r", "--name-only", "HEAD")
+    if rc != 0:
+        return None
+    hits = []
+    for path in out.splitlines():
+        base = os.path.basename(path)
+        if any(fnmatch.fnmatch(base, pat) for pat in SECRET_NAME_PATTERNS):
+            hits.append(path)
+    return hits
+
+
 def check_added(root, name, results):
     roster, _ = load_roster(root)
 
@@ -197,9 +224,18 @@ def check_added(root, name, results):
     # The name must not collide with management territory. Checked case-insensitively for the same
     # reason as the squad id below.
     owned = em_owned_names(root)
-    if not owned:
-        _ok(results, "the name is not management territory",
-            "(could not read hooks/supervisor_gate.py — NOT CHECKED, not a pass)")
+    if owned is None:
+        # _fail, not _ok. The docstring above already said this reports NOT CHECKED and FAILS, and
+        # the sibling `check_removed` takes the same line ("a check that cannot fail is not a
+        # check") — but the caller called _ok, so a line reading "NOT CHECKED, not a pass" WAS a
+        # pass. Reachable for real: `skills/init` scaffolds standup/, demo-app/, setup.sh and
+        # .env.example, never hooks/, so on a scaffolded install the deny list was inert and a
+        # squad pointed at the engine's own control plane went through.
+        _fail(results, "the name is not management territory",
+              "could not read or fully parse hooks/supervisor_gate.py under %s, so the "
+              "management-path deny list could not be derived — NOT CHECKED. Copy "
+              "hooks/supervisor_gate.py into this project, or run the check from the plugin "
+              "checkout." % root)
     elif name.lower() in {o.lower() for o in owned}:
         _fail(results, "the name is not management territory",
               "%r is a path the supervisor gate classifies as management/governance, not project "
@@ -235,6 +271,15 @@ def check_added(root, name, results):
                   "reviewable." % proj)
         else:
             _ok(results, "the project is its own git repo with a baseline commit", proj)
+            secrets = committed_secret_files(proj)
+            if secrets:
+                _fail(results, "no secret-shaped file is committed in the project",
+                      "%s are in the project's history. /add-project refuses these by NAME before "
+                      "it commits, because content scanning does not see an unquoted dotenv line. "
+                      "Remove them from history (they are already committed here) and add them to "
+                      "the project's .gitignore." % ", ".join(sorted(secrets)[:5]))
+            elif secrets is not None:
+                _ok(results, "no secret-shaped file is committed in the project")
             if not has_origin(proj):
                 _fail(results, "the project has an origin remote",
                       "%s has no `origin`. The portal's code-task flow resolves origin's default "
@@ -319,8 +364,19 @@ def check_added(root, name, results):
     # content itself, and it travels when the user pushes their own agent-team repo.
     origin_dir = ".%s-origin.git" % name
     if os.path.isdir(os.path.join(root, origin_dir)):
-        rc_ign, _ = _git(root, "check-ignore", "-q", origin_dir)
-        if rc_ign != 0:
+        # `git check-ignore` exits 128 outside a repo, which is not "unignored" — it is "no index to
+        # be absorbed into". setup.sh never git-inits the install root, so this shape is reachable,
+        # and the sibling pointer check already guards for it. Without this the checker fails
+        # loudly for a state that carries no risk: noise, and noise is what gets a checker ignored.
+        # ONE decision point, not a guard plus a redundant conjunct. The first version had both,
+        # and redundant protection cannot be mutation-covered: neutralising either half left the
+        # other one holding, so the branch had no independent covering case — the exact defect this
+        # file keeps being reviewed for.
+        rc_isrepo, _ = _git(root, "rev-parse", "--is-inside-work-tree")
+        if rc_isrepo != 0:
+            _ok(results, "the local bare origin is ignored",
+                "(this root is not a git repo — nothing can absorb it — n/a)")
+        elif _git(root, "check-ignore", "-q", origin_dir)[0] != 0:
             _fail(results, "the local bare origin is ignored",
                   "%s exists but is NOT ignored — `git add -A` in this installation absorbs the "
                   "project's git objects, secrets included, into its own history. Add "

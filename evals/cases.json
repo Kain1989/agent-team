@@ -1,19 +1,12 @@
 {
-  "_comment": "Regression eval gold-set for /agent-team:eval. Each case runs through the gated pipeline against its target, then its `check` shell command scores it. `target` below is the DEFAULT; a case may override it, and `requires` names the directory the case cannot run without. Resolve the plan with `python3 evals/resolve_cases.py` — it decides RUN vs SKIP deterministically, so a missing directory is a stated skip rather than a silent failure. Add cases here as the team's prompts/roster/templates evolve.",
-  "_targets": "demo-app is an OPTIONAL sample: it can be deleted once you have your own repo. Cases bound to it therefore declare `requires: demo-app` and SKIP when it is gone. A skip is not a pass — the scorecard prints it as `- skipped` and says why. To add cases for your own repo, copy a case, set its `target` + `requires` to your project directory, and write a `check` that fails before the work and passes after.",
-  "target": "demo-app",
-  "cases": [
-    {
-      "id": "truncate-helper",
-      "requires": "demo-app",
-      "prompt": "Add a truncate(text, length, suffix='...') helper to textkit: create textkit/truncate.py shortening text to at most `length` chars total (append suffix only when it cuts, never exceed length; return unchanged when it already fits). Export truncate from textkit/__init__.py. Add tests/test_truncate.py.",
-      "check": "python3 -c \"from textkit import truncate; assert truncate('hello world', 8) == 'hello...'; assert truncate('hi', 8) == 'hi'; assert len(truncate('abcdefghij', 5)) <= 5\" && python3 -m pytest -q"
-    },
-    {
-      "id": "slugify-empty-string",
-      "requires": "demo-app",
-      "prompt": "Make sure slugify handles empty/whitespace input: slugify('') and slugify('   ') both return ''. Add tests covering it if missing.",
-      "check": "python3 -c \"from textkit import slugify; assert slugify('') == ''; assert slugify('   ') == ''; assert slugify('Hello, World!') == 'hello-world'\" && python3 -m pytest -q"
-    }
-  ]
+  "_comment": "Regression eval gold-set for /agent-team:eval. Each case runs through the gated pipeline against its target, then its `check` shell command scores it. Resolve the plan with `python3 evals/resolve_cases.py`. THIS SHIPS EMPTY: the bundled sample it used to test was retired, and a gold set for a project we have never seen cannot be written for you. `_example_case` below is kept as documentation of the shape \u2014 the resolver ignores keys starting with an underscore.",
+  "_targets": "Copy `_example_case` into `cases`, set `target` + `requires` to your project directory (the name you gave /add-project), and write a `check` that FAILS before the work and PASSES after. A check that passes either way scores nothing.",
+  "cases": [],
+  "_example_case": {
+    "id": "truncate-helper",
+    "target": "<your-project>",
+    "requires": "<your-project>",
+    "prompt": "Add a truncate(text, length, suffix='...') helper: shorten text to at most `length` chars total, appending suffix only when it cuts. Add tests.",
+    "check": "python3 -c \"from yourpkg import truncate; assert truncate('hello world', 8) == 'hello...'\" && python3 -m pytest -q"
+  }
 }

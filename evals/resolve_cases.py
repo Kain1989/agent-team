@@ -75,8 +75,8 @@ def resolve(data: dict, repo: str) -> list:
                 "Add one, or point the case at a project directory from standup/team.json.")
         elif not os.path.isdir(os.path.join(repo, target)):
             run, reason = False, (
-                "target directory %r is not here. If this was the optional demo-app sample, that "
-                "is expected — delete or re-point this case." % target)
+                "target directory %r is not here. Re-point this case at a project you added with "
+                "/add-project, or remove it." % target)
         elif requires and not os.path.isdir(os.path.join(repo, requires)):
             run, reason = False, (
                 "requires %r, which is not here." % requires)
@@ -116,7 +116,7 @@ def main() -> int:
         print("Nothing to run here. This is a stated result, not a silent one:")
         print("  * every case is bound to a directory that is not in this checkout;")
         print("  * add a case for your own project (copy one and set `target` + `requires`), or")
-        print("  * restore the sample with /agent-team:init if you want the bundled gold-set.")
+        print("  * copy `_example_case` from evals/cases.json and point it at your project.")
     return 0
 
 

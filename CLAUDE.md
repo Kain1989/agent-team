@@ -52,28 +52,6 @@ rather than overwrites, and refuses to clear while another run still holds the e
 When the user says "run the agent team", "run the standup", "start the team", "do a
 standup", or types **`/standup`** — execute the full gated standup + work cycle:
 
-1. **Make sure the work repo is a git repo.** If `demo-app/.git` is missing (and a `demo-app/`
-   exists), initialize it:
-   ```
-   git -C demo-app init -b main
-   git -C demo-app add -A
-   git -C demo-app -c user.name=demo -c user.email=demo@local commit -m "demo-app: initial import"
-   ```
-   `demo-app/` is an OPTIONAL sample and deleting it is supported, so this step is conditional on
-   it being there — never `git -C demo-app` a directory you have not confirmed exists.
-2. **Read `standup/team.json`** (the full roster) so you can pass it to the workflow.
-3. **Run the team via the Workflow tool** (this is the whole squad — per-dev standup →
-   squad sync → EM board → gated work on the top task):
-   ```
-   Workflow({ scriptPath: "standup/standup.workflow.js",
-              args: { date: "<today's date>", since: "6 hours ago",
-                      roster: <the parsed contents of standup/team.json>,
-                      work: true, maxTasks: 1 } })
-   ```
-4. **After it completes**, summarize the board + what was worked + any commits on
-   `demo-app` branches, append a dated section to `standup/log/<today>.md`, and update
-   `standup/BACKLOG.md`'s "Last updated".
-
 If your Claude Code build does **not** have the `Workflow` tool, orchestrate the same
 gated SDLC yourself with the **Task** tool, one phase at a time (see "The gated SDLC"
 below). Either way, the work lands as reviewed commits on `demo-app` feature branches —

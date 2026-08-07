@@ -30,7 +30,7 @@ On top of that:
 ## No secrets in the repo
 
 The repo tracks source only — `.venv/`, `control/jobs.db`, `.env`, generated gate configs,
-and `demo-app/.git` are gitignored. Do not commit credentials; the portal needs none.
+and each project's local bare origin are gitignored. Do not commit credentials; the portal needs none.
 
 ## Platform support
 

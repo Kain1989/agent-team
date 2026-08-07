@@ -14,12 +14,8 @@ This command does **not** carry its own copy of the pipeline. It dispatches to t
 there is no second recipe to drift. The canonical step list lives in `standup/team.json` →
 `manager.policy.sdlc_pipeline`.
 
-1. **Ensure the target is a git repo** (default `demo-app`). This is a precondition, not a pipeline
-   step — without it a run pays for the whole SDLC and then fails at commit. If `demo-app/.git` is
-   missing (and a `demo-app/` exists):
-   `git -C demo-app init -b main && git -C demo-app add -A && git -C demo-app -c user.name=demo -c user.email=demo@local commit -m "demo-app: initial import"`
-   `demo-app/` is an optional sample — if it is gone, skip this and make sure the assignee's own
-   `folder` is a git repo instead. Never `git -C <dir>` a directory you have not confirmed exists.
+1. **The target must be a git repo with a commit.** `/add-project` guarantees that for every
+   project it creates; if you are pointing at something it did not create, check first.
 2. **Read `standup/team.json`** and pick the `assignee` — a developer id from the squad that owns the
    work (e.g. `dev_a` for `demo-app`, `portal_backend` for the portal). Pass the roster **verbatim**;
    a trimmed roster silently degrades the run.

@@ -4,15 +4,7 @@ description: Run the full agent-team standup + gated work cycle on demo-app (the
 
 Run the agent team's full standup + gated work cycle now. Do it; don't just describe it.
 
-1. **Ensure the work repo is ready.** If `demo-app/.git` does not exist (and a `demo-app/` exists), run:
-   ```
-   git -C demo-app init -b main && git -C demo-app add -A && \
-   git -C demo-app -c user.name=demo -c user.email=demo@local commit -m "demo-app: initial import"
-   ```
-   `demo-app/` is an optional sample. If it is gone, skip this step — the squads that matter are
-   the ones in `standup/team.json` pointing at your own repos.
-
-2. **Read `standup/team.json`** (the full roster) and confirm today's date (`date +%Y-%m-%d`).
+1. **Read `standup/team.json`** (the full roster) and confirm today's date (`date +%Y-%m-%d`).
 
 3. **Run the whole squad via the Workflow tool** — per-dev standup → squad sync → design pass →
    EM board → light staff pulse → the gated SDLC on the top autoworkable task:
