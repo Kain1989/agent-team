@@ -24,6 +24,17 @@ jobs:
         working-directory: standup/portal
         run: python -m pytest -q
 
+      - name: Frontend contract test
+        # The ONLY test that EXECUTES static/app.js. It ran green for its whole life while
+        # being referenced by nothing but its own header — not this file, not the README —
+        # so the three source-TEXT judges added around it in tests/test_static_mock.py were
+        # the only thing aimed at app.js, and the harness that actually renders it was
+        # aimed at nothing. Node stdlib only (fs/path/vm): no npm install, no jsdom, no
+        # package.json, and the runner image already ships node (the two steps below have
+        # always relied on that). Its E-03 proof is in-band, not a flag — section 8 renders
+        # the same payload through the pre-fix producer shape and requires it to break.
+        run: node standup/portal/tests/contract.frontend.test.js
+
       - name: Workflow parse check
         # `node --check` PASSES on an unescaped backtick that truncates a prompt template, so it
         # cannot catch the failure where the engine refuses to load the workflow. This can.

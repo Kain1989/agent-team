@@ -352,6 +352,7 @@ the directory alone.
 
 ```bash
 cd standup/portal && ../.venv/bin/python -m pytest -q                     # the portal engine
+node standup/portal/tests/contract.frontend.test.js                       # the page still renders what the API sends
 node standup/control/verify_design_quality.js --self-test                 # the design judge can still fail
 node standup/control/check_workflow_parse.js standup/standup.workflow.js  # the engine still loads
 node standup/control/tests/test_sdlc_routing.js                           # both entry paths still reach intake
@@ -363,12 +364,15 @@ bash standup/control/tests/test_supervisor_gate.sh                      # the ga
 bash standup/control/tests/test_release_invariants.sh                   # what ships is consistent with itself
 ```
 
-**Every judge here takes `--self-test` except two** — it deliberately breaks the thing being judged
-and requires the judge to go red, so run it before trusting a green. The two that do not are the
-portal pytest suite, and `check_workflow_parse.js`, which takes a **filename** and would read
-`--self-test` as one, reporting a missing file as if the engine were broken. (This line used to
-carry a count and a hand-written list of names; both went stale the first time a judge was added,
-which is the same rot the paragraph below is about.)
+**Run `--self-test` before trusting a green** — it deliberately breaks the thing being judged and
+requires the judge to go red. Three commands above do not take the flag, each for its own reason,
+and each carries the same proof by another route: the portal pytest suite has `*_rejects_*` tests
+that mutate what they check; `check_workflow_parse.js` takes a **filename** and would read
+`--self-test` as one, reporting a missing file as if the engine were broken; and
+`contract.frontend.test.js` proves it in-band on every run — its last section renders the same
+payload through the pre-fix producer shape and requires the card to break. (This line used to carry
+a count and a hand-written list of the judges that DO take the flag; both went stale the first time
+a judge was added, which is the same rot the paragraph below is about.)
 
 The last two are newer and worth saying what they are for. `test_supervisor_gate.sh` covers
 `hooks/supervisor_gate.py` — the one mechanism separating "the EM supervises" from "the EM writes

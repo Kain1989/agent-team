@@ -17,11 +17,24 @@
  * then we inspect the nodes app.js produced. Pure Node (>=18 for global fetch
  * shape is irrelevant — we stub fetch ourselves).
  *
- * RUN:
- *   node portal/tests/contract.frontend.test.js
- *   # or from the portal dir:
- *   node tests/contract.frontend.test.js
- * Exit code 0 = pass, 1 = fail. Each assertion prints a line.
+ * RUN (from anywhere — every path below is resolved off __dirname):
+ *   node standup/portal/tests/contract.frontend.test.js
+ * Exit code 0 = pass, 1 = fail, 2 = the harness itself broke. Each assertion prints a line.
+ *
+ * DEPENDENCIES: none. Node stdlib only (fs/path/vm) — no npm install, no jsdom, no
+ * package.json. That is deliberate: this is the ONLY test that executes app.js, and a
+ * harness that needs a toolchain is a harness that gets skipped.
+ *
+ * WIRED IN: README's Tests block + `.github/workflows/ci.yml`. It was neither for its whole
+ * life — referenced by nothing but its own header — while three source-text judges were
+ * added around it in `tests/test_static_mock.py`. Three checks reading app.js as TEXT and
+ * the one that RUNS it connected to nothing is this repo's recurring shape: the apparatus
+ * exists, and nothing is aimed through it.
+ *
+ * SELF-TEST: there is no `--self-test` flag; section 8 is the equivalent, in-band. It feeds
+ * the same payload through the PRE-FIX producer shape and requires the card to break. A
+ * judge that has not been shown to fail is not a judge (`E-03`) — this one shows it on
+ * every run rather than behind a flag.
  * ========================================================================== */
 "use strict";
 
@@ -126,10 +139,15 @@ function realisticStatus() {
       { title: "dated 3d soon", severity: "P1", days_remaining: 3, leverage: null },
       { title: "P2 undated", severity: "P2", days_remaining: null, leverage: null },
     ],
+    // Neutral placeholder squad. This used to name `demo_squad`/`dev_a`/`dev_b` — the
+    // bundled sample deleted in 0.5.0 — so the one harness that runs app.js described a
+    // roster that no longer ships. Cosmetic (the render paths under test never read these
+    // ids), but the same rename the embedded mock already took in db5ba38; the names here
+    // now match it so both fixtures speak one vocabulary.
     squads: [
-      { id: "demo_squad", name: "Demo Dev Squad", health: "yellow", devs: [
-        { id: "dev_a", role: "Builder", health: "green", current_task: "slugify helper" },
-        { id: "dev_b", role: "Reviewer & Tests", health: "yellow", current_task: "unpushed branch", stale: true },
+      { id: "your_squad", name: "Your Dev Squad", health: "yellow", devs: [
+        { id: "dev_1", role: "Builder", health: "green", current_task: "slugify helper" },
+        { id: "dev_2", role: "Reviewer & Tests", health: "yellow", current_task: "unpushed branch", stale: true },
       ] },
     ],
     // comms_triage MUST be present: renderCommsStreams() only runs inside the
