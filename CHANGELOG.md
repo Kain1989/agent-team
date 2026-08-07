@@ -3,10 +3,229 @@
 All notable changes to the **agent-team** plugin. Format: [Keep a Changelog](https://keepachangelog.com/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] — 2026-08-06
+
+**A fresh install had a broken path at both ends: the team would run a whole tick against a roster
+that could dispatch nobody, and there was no single command to give it something to dispatch. This
+release fixes the stop and the answer it points at — which is why the two halves ship together.**
+
+Run `/standup` on a new install and it did all of this: polled a roster with no active developer,
+ran Comms, Standup, Design, Synthesize and Staff Pulse against it, **armed the supervisor-gate
+exemption** — writing into the user's project and switching their gate off for six hours — and then
+printed `TICK DONE — 0 task(s)`, which reads like success. The engine now stops before any of that
+and says what to do instead: `add a project with /add-project <git-url>`. That command did not
+exist; it does now, and it is the one command between "installed" and "working on your own code".
+
+> **RELEASE CONSTRAINT — these two halves ship in one push, never separately.** The empty-roster
+> stop names `/add-project`, and `test_sdlc_routing.js` pins that string (`the stop names the
+> command that fixes it`) — so if the engine half shipped alone, a judge would be holding a false
+> promise in place. An error message naming a command that does not exist is worse than one offering
+> no suggestion: it sends the reader searching for something that was never there. If the engine
+> half ever has to be reverted alone, that string must change in the same commit.
+
+### The problem this solves — the engine end
+
+- **A run handed no roster worked a different team and reported green.** `EMBEDDED_ROSTER` was a
+  hardcoded copy used whenever `args.roster` was absent, falsy, or an unparseable string. Measured
+  on five inputs — key absent, `undefined`, `''`, `{}`, a truncated JSON string — every one produced
+  a full, clean-looking tick. The asymmetry that made it obvious once seen: three lines above, an
+  unparseable `args` **string** already threw; an unparseable `args.roster` string was swallowed.
+- **An undispatchable roster ran the whole tick.** `{}`, `{teams:[],staff:[]}` and an
+  all-`active:false` roster produce byte-identical output, because the squad filter collapses
+  "nobody active" and "no squads" into one state. Arm is the expensive part of that, for the reason
+  above.
+- **Arm could write the flag into a neighbouring install.** It located its helper by RELATIVE path
+  from an inherited cwd. With two agent-team trees on one machine that resolved into the neighbour,
+  whose helper truthfully reported `team_run_active PRESENT` — about the wrong repo. Where no such
+  tree existed, the `mkdir -p` fallback CREATED the missing directory and the verification (`ls` on
+  a path `mkdir -p` had just guaranteed) confirmed it: a check that could not fail.
+- **`RULEBOOK_PATHS` had the same bug one function away, already firing.** From the host checkout it
+  read the host's `DESIGN_RULEBOOK.md` (has `B-12`, no `F-01`); from the plugin, the plugin's (has
+  `F-01`, no `B-12`) — both reporting the identical `rulebook_source: "DESIGN_RULEBOOK.md"`. Read
+  the wrong one and this plugin's own `F-01..F-07` are rejected by `E-01` as rules that do not exist.
+
+### The problem this solves — the onboarding end
+
+Pointing the team at your own repo took four edits, in order, and getting any one wrong failed
+later, somewhere else, with an error about something different: clone the repo; add a squad with a
+paired set of developers whose `folder` is it; declare a `review_surface` with a runnable `inspect`;
+add the clone to `.gitignore`. Three were documented in README. **The fourth was not** — and it is
+the one that bites quietly: the clone is a git repo inside this one, so a later `git add -A` records
+it as a **gitlink** (mode `160000`), a pointer to a commit nobody else can fetch. Nothing breaks at
+add time; it surfaces at commit time looking like a git problem.
+
+### What changed
+
+- **No embedded roster.** Missing, non-object, or unparseable `args.roster` stops the run. That and
+  the empty-roster case route through one `stopTick`, placed immediately after `stopTick` exists and
+  before any phase — not earlier, because `stopTick` is a `const` and reaching it from the
+  resolution site is a TDZ `ReferenceError`.
+- **Arm resolves an absolute root and the ENGINE asserts identity.** The agent walks up for an
+  anchor (`standup/team.json` + `standup.workflow.js`, nearest wins), arms via the absolute path,
+  and verifies against `team_run_active PRESENT` — a string `mkdir` cannot fabricate. It reports the
+  tree's team/dev ids and the engine compares them with the roster it holds in memory. That
+  comparison is the load-bearing half: a neighbour's helper is not lying when it says PRESENT, so
+  **no check the writer performs on itself can catch this** — it needs a fact the writer never had.
+  A sorted id projection is compared, never a deep equality. The `mkdir -p` fallback is deleted: a
+  file written where the gate does not read is worse than no file, because it reports success.
+- **`rulebook_source` is the resolved absolute path plus the id count**, and a candidate is accepted
+  only once shown to belong to this install. Unverifiable is **rejected**, not accepted-with-a-note.
+- **`/add-project <git-url> [name] [--kind K] [--inspect CMD]`** does all four onboarding steps and
+  ends by running the checker. `name` is used in three places at once — the directory, the squad id,
+  and the developer-id prefix (`-` becomes `_`) — so it has to be free in all three.
+- **`/remove-project <name>`** is the inverse and **never deletes your repository**: removing a
+  squad is reversible, deleting a working tree is not. It reports `evals` targets, staff
+  `scope_folders` and cross-squad `pair` references **before** editing, because a dangling `pair` is
+  something the engine stops a run on.
+- **Headless is a first-class path.** A missing `--kind`/`--inspect` is a question in an interactive
+  session and a **refusal with a paste-ready re-run command** in a non-interactive one. A question
+  asked into `claude -p` is not a question, it is a hang that dies on a timeout with nothing to show.
+- `/help` leads with **Setup**: whoever types `/help` most likely just installed this and has no
+  project, and the answer to their real question is `/add-project`.
+
+### `standup/control/verify_project.py`, and the step that runs it
+
+The four onboarding invariants are checked by code rather than by a checklist in a prompt, for the
+same reason `/eval`'s RUN/SKIP decision moved out in 0.3.9: a prompt cannot run `git ls-files -s`.
+It exits 1 naming the field to fix, and **2** — not 1 — when `standup/team.json` does not parse,
+because that is not "an invariant failed", it is "nothing can be checked and every other command is
+broken too".
+
+Both commands run it as their final step. That wiring is the point, and it was missing from the
+first cut: the script existed, CI ran it, two judges tested it — and **no skill file mentioned it**,
+so from the product path it was unreachable and the headline gitlink invariant was still enforced
+only by a sentence in a prompt. The 0.3.9 precedent was cited to justify the design and then not
+followed; `/eval` actually calls its checker at step 0. This repo has the same failure already
+recorded: `/work`, referenced by three governance documents and backed by nothing.
+
+### `/remove-project` keeps the `.gitignore` line
+
+Found by a user walkthrough, not by a judge. Removing the squad used to also remove the ignore entry
+— while deliberately leaving the clone on disk. That does not tidy anything up: it re-arms the
+gitlink this release exists to prevent, silently, on the next `git add -A`. The entry now stays as
+long as the directory does, the output says so, and the checker's invariant is conditional on the
+directory rather than on the roster.
+
+### "Never deletes your code" is now a check that can fail
+
+The single assertion behind that promise — stated in the skill frontmatter, the README table, this
+changelog and the commit message — called `_ok` on **both** branches, including the one where the
+directory was gone. It printed `ok` at the exact moment the promise broke. It cannot be checked
+after the fact, so `/remove-project` records the directory's state before editing and passes
+`--code-before`; without it the checker reports NOT CHECKED rather than `ok`.
+
+### Judges
+
+`test_arm_path.sh` (new), `test_add_project.sh` (new, **14** checker branches each with its own
+covering case), `test_remove_project.sh` (new), and `C4`/`C5` groups in `test_sdlc_routing.js`
+(**111** cases). CI runs every judge, and every judge that has a `--self-test` runs it first.
+
+The arm judge builds its decoy as a real lowercase `standup/` directory rather than relying on
+macOS case-folding: CI is `ubuntu-latest` and case-sensitive, so a `STANDUP/` decoy would never
+resolve there, "the decoy is untouched" would be vacuously true, and the `E-03` mutation would stay
+green on the only machine that runs it automatically.
+
+One coverage hole found at the integration gate and fixed there: `test_arm_path.sh`'s "nearest
+wins" check was `grep -qi 'first'`, which matches the prompt's prose in two places — so deleting the
+`break` from the shipped walk, making the **outermost** install win (the nested-install hijack that
+resolution exists to kill), left the judge at exit 0. It now greps the loop control itself. The
+sibling anchor-pair check had been hardened for this exact reason and this one was left loose.
+
+`test_remove_project.sh`'s central assertion is **byte equality** of `team.json` after add → remove
+— what makes "surgical edit" testable rather than aspirational. Case B earns it: a parse-and-dump
+removal still parses, still carries identical DATA, and is caught only by the byte compare. The
+judge's header says outright that normalising before the compare would delete the only thing it
+checks.
+
+Every mutation is split **one per branch**, and both first cuts failed that: a single fixture
+neutralising `if (ROSTER_ERROR)` reddened only the missing-roster case because the other branch
+caught the rest, and `test_add_project.sh` printed "every checker branch has an independent covering
+case" while **six** survived — including the `--kind` typo guard and three of the four assertions in
+the `/remove-project` checker, on the command whose headline promise is "never deletes your code".
+The self-tests now print the number of branches they actually neutralised.
+
+### Known gaps, stated rather than implied
+
+- **The Arm identity assertion does not cover a TWIN checkout.** Resolution and identity cover
+  **disjoint** sets, not two layers of one defence: resolution kills the case-folding hijack (the
+  one actually observed), identity catches a cross-project decoy whose roster differs, and neither
+  catches two checkouts of the *same* repo — identical rosters so identity agrees, valid anchor so
+  resolution accepts. It arms the wrong tree and logs `verified`. That is the most likely two-tree
+  layout for a published plugin: a marketplace install beside a git clone. Closing it needs a
+  **run-scoped** fact — a nonce the engine writes and reads back, or the realpath+size of the
+  running `standup.workflow.js`. Not built here.
+- **Surgical editing is specified, not enforced.** Both commands declare `allowedTools: Read, Bash,
+  Edit` and not `Write`, but `Bash` remains, so a `python3 -c` rewrite is still reachable. The
+  `_comment` fields in `standup/team.json` are the only place parts of the schema are documented.
+- **Both new judges test a reference implementation, not the commands.** `/add-project` and
+  `/remove-project` are prompts; the judges prove the invariants are checkable and that the checker
+  has teeth on every branch. Whether a model follows the prompt is judged by a human walkthrough,
+  which is the right instrument for that half.
+- **One headless run in five returned exit 0 having done nothing** — it printed an intention and
+  stopped. 4/5 were correct and 0/5 hung, so the refuse-rather-than-hang requirement holds; an
+  exit-0 no-op is the worst shape for an unattended caller. **Observed once, not reproduced.**
+- **Editing the roster while a run is in flight produces the WRONG diagnosis and leaves the gate
+  open.** `args.roster` is the launcher's snapshot at t=0; the Arm agent re-reads `team.json` from
+  **disk** later, in Phase 3.5. Run `/add-project` or `/remove-project` inside that window and the
+  two projections diverge, so the identity assertion throws `ARM armed the WRONG install` — a
+  diagnosis that is simply wrong for this cause, and whose fix line ("launch the Workflow with a cwd
+  inside the install you mean to run") does not apply. Worse, the flag is already set by then, and
+  `disarmTeamRunExemption()` is called at top level rather than in a `finally`, so the throw skips
+  it: **the user's supervisor gate stays OFF for up to 6h**. The window is short for `/work` and
+  **hours** for `/standup`, where Arm follows the whole roster poll.
+  It fails **safely** — it stops rather than arming the wrong tree, and not disarming is the
+  *correct* behaviour in a genuine wrong-install case, which is why this is not a quick fix: telling
+  the two apart is a real engine change, and the 6h TTL is the backstop meanwhile. Direction when it
+  is fixed: compare the two id sets, and if the armed set is a superset/subset of `ARM_EXPECT_*`
+  with a plausible `resolved_root`, say "the roster changed during this run (added: …) — relaunch"
+  instead of "wrong install". Both new commands now carry a "do not run this during `/standup` or
+  `/work`" warning.
+- **`test_add_project.sh` and `test_remove_project.sh` have no minimum-case floor.** Deleting
+  `run_cases` entirely yields `all checks PASS`, exit 0. Their `--self-test` also only asserts that
+  the named case goes RED, not that the others stay green — every one of the 14 mutations is
+  surgical today (each reddens exactly its own case, spot-checked independently), but a future
+  catastrophic mutation would read as a pass.
+- **Filesystem access from a workflow script has never been observed either way.** `RULE_IDS_SOURCE`
+  only ever entered the return object, so 27 recorded runs say nothing. Rather than spend a run
+  finding out, both paths were made correct: Arm needs no `fs` at all, and the rulebook read treats
+  no-`fs` as a **degrade** that says so, never a stop. It is now logged, so the next real tick
+  becomes the evidence.
+
+### A note on the `[0.3.9]` entry below
+
+Three lines in it were **edited after publication** — `main` is `2d9c3de`, so 0.3.9 was already out.
+**All three were wrong on the day they shipped; this release's work surfaced them.** Checked against
+the published tree: the quoted code fragment `if (t.folder && !owned.includes(t.folder)) stopTick(...)`
+**never** matched the source — at `2d9c3de` it was already a two-line construct squeezed onto one
+line — and is now a form that greps; "twelve lines later" was **seven** at `2d9c3de` too
+(`setup.sh` is byte-identical between then and now, marker at `:111`, guard at `:118`); and running
+the published parity judge on the published tree audits **7** sites, so "five documents" was
+conflating two different fives from the start.
+
+Correcting them follows this repo's own rule that a number copied into prose rots like a version
+number. It is still a rewrite of published history, which is why it is stated here rather than left
+to be found in a diff.
+
+The first draft of this very note got the attribution backwards — it said the engine changes "made
+them untrue as written", which turns *we published three false statements and quietly fixed them*
+into *our new work invalidated three accurate ones*. Nobody had asked for that framing; it drifted
+that way on its own, in the paragraph whose entire purpose was honest disclosure. Recorded because
+the mechanism is worth more than the correction: a narrative nobody is checking will drift toward
+the flattering version, and it reads perfectly reasonable while it does.
+
+### `/sync-roster` prunes — verified, not assumed
+
+`agents_gen.py` rewrites the agent directory and unlinks any file carrying its own `generated from
+team.json` header whose role left the roster; a hand-written def with no header survives. So
+`/remove-project` does **not** delete `.claude/agents/*.md` itself — and must not, since doing it by
+name would also catch a hand-written file that happened to collide.
+
+
 ## [0.3.9] — 2026-08-06
 
-**Deleting the sample — which the docs invite — broke the installer, five documents, and the eval
-suite. Found from questions two external teams raised after trying the plugin.**
+**Deleting the sample — which the docs invite — broke the installer, the documents that tell you
+how to run it, and the eval suite. Found from questions two external teams raised after trying the
+plugin.**
 
 ### The problem this solves
 
@@ -64,7 +283,7 @@ isolation its own recipe describes does not survive contact with the engine. In
 read). `git -C` resolves against the process cwd, so the reviewer reads the *real* target while the
 work happened in the copy: an empty diff, reported as `review-failed`. Re-pointing `folder` at the
 copy is refused by the ownership check that stops on a folder the assignee does not declare
-(`if (t.folder && !owned.includes(t.folder)) stopTick(...)`). `skills/eval/SKILL.md` carries this
+(grep the engine for `!owned.includes(t.folder)`). `skills/eval/SKILL.md` carries this
 warning inline with the two workarounds. Do not read a `review-failed` from an eval as a quality
 regression without checking which directory was read.
 
@@ -88,7 +307,7 @@ read as green — the same disease they were written to catch, one level up:
 - it knew exactly one sentence shape, so `/portal` telling users to target `project:demo-app`
   unconditionally was invisible to it — the pair this release's own note promised to keep in sync;
 - the setup judge's window stopped at the section-6 marker, excluding a guard **this release
-  added** twelve lines later, and passed all-green over code it could not see;
+  added** seven lines past it, and passed all-green over code it could not see;
 - the eval judge had no fixture where `requires` differed from `target`, so that entire branch
   could be deleted with every check still green;
 - and its self-test reported PASS off an unrelated failure while the mutation quietly no-opped.

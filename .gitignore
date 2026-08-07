@@ -14,6 +14,7 @@ standup/control/*.db
 standup/control/jobs.db-*
 standup/control/heartbeat.json
 standup/control/run.lock
+standup/control/team_run_active
 standup/control/control.log
 standup/control/runs/
 standup/control/requests/

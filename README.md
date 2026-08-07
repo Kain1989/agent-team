@@ -18,6 +18,13 @@ approval gate for anything irreversible.
 4. Type `/standup`, or just say *run the agent team*. The board, the squads and each
    developer's progress update live in the portal while the top task goes through the gates.
 
+**That runs the team on the bundled sample.** To put it on YOUR code, install this as a plugin
+(below) and run `/agent-team:add-project <git-url>` — see [Point it at your repo](#point-it-at-your-repo).
+Worth knowing before you pick a path: in a checkout you opened directly, **only `/standup` and
+`/portal` work**, because they are the two files in `.claude/commands/`. Every other command in this
+README — `add-project` included — needs the plugin installed, and is namespaced `/agent-team:…`
+there. The quick start above and the headline feature are on two different install paths.
+
 Prerequisites: Claude Code with the Workflow tool and sub-agents (that is what runs the
 squad); Python 3.9+, `git`, and the `claude` CLI on `PATH` (the portal's code-task worker
 spawns a headless `claude -p`).
@@ -141,10 +148,13 @@ Set up and verify:
 | command | what it does |
 |---|---|
 | `/init` | scaffold a team project into the current directory — engine, starter roster, sample app |
+| `/add-project <git-url> [name] [--kind K] [--inspect CMD]` | clone your repo in and give it a squad — the one command that points the team at your own code. `name` defaults to the repo basename and is also how you resolve a collision |
+| `/remove-project <name>` | remove a project's squad from the roster (never deletes your code) |
 | `/eval` | run the regression suite in `evals/cases.json` and score pass or fail |
 | `/help` | list every command with what it does |
 
-Those sixteen are every entry in `skills/`; nothing is omitted.
+That table is every entry in `skills/`; nothing is omitted. (Counting them here would be one
+more number to rot — `ls skills/` is authoritative.)
 
 ---
 
@@ -190,7 +200,7 @@ agent-team/
 ├── ARCHITECTURE.md     how the parts connect — which file owns which beat
 ├── DESIGN_RULEBOOK.md  the numbered design rules the design gate judges against
 ├── .claude/commands/   /standup and /portal — the two unprefixed commands
-├── skills/             the sixteen plugin commands
+├── skills/             the plugin commands (one directory each — `ls skills/` is the count)
 ├── hooks/              the supervisor charter, the route reminder, the PreToolUse gate
 ├── standup/            the engine
 │   ├── team.json       the roster, and the canonical policy
@@ -264,15 +274,39 @@ there would be no diff for you to review — so what confines it is the worktree
 read-only-ness. It gets no shell at all, which is why it cannot run the tests, commit, push or
 merge; the trusted worker does that, and only after you approve. Nothing is ever pushed.
 
+<a id="point-it-at-your-repo"></a>
+
 ## Point it at your repo
 
-Four preconditions, then the team is working on your own code instead of the sample:
+```
+/add-project https://github.com/you/your-repo --kind web --inspect "(npm start >/tmp/app.log 2>&1 &) && sleep 8 && curl -sS -f http://localhost:3000"
+/sync-roster
+/work "the first thing you want done"
+```
 
-1. Add a developer to a squad in `standup/team.json` whose `folder` is your repo.
-2. Give that squad a `review_surface` — the pipeline refuses to run against an assignee, a
-   pair, a folder or a review surface nobody declared.
-3. Make sure the repo has an `origin` remote.
-4. Run `/standup`, or submit a code task targeting `project:<your-folder>`.
+`/add-project` clones the repo in, creates a squad with a pair of developers pointed at it, records
+the `review_surface` (`kind` + `inspect`) the pipeline refuses to run without, and adds the clone to
+`.gitignore` so `git add -A` here does not record it as a gitlink. Those four used to be manual and
+order-dependent; three of them were documented and the fourth was not, which is how people ended up
+with a team aimed at a directory that was not there.
+
+`name` (optional, defaults to the repo's basename) is used in **three** places at once: the
+directory under this project root, the squad id, and the prefix of the two developer ids — with
+`-` replaced by `_`, so `my-app` gives `my_app_a` / `my_app_b`. It has to be free in all three.
+
+`--kind` is one of `web report agent api cli none`. **With `--kind none`, omit `--inspect`
+entirely** — `none` declares "this has no inspectable face", which is a legitimate and honest
+answer; there is no command to give. (`--inspect none` is not a magic value: it is stored as the
+literal string, which is not what you meant.) **`--inspect` is the load-bearing one** — the
+command a stranger runs to actually SEE the surface — and it must TERMINATE. A bare `npm start` is
+a foreground server, so anything chained after it never runs; background it, wait, then probe (that
+is the shape the bundled portal squad uses). `none` is an honest answer for something
+genuinely faceless; an invented `inspect` that does not run is worse, because the review gate keeps
+trying to cash it. Run `/sync-roster` afterwards: the new developers do not exist as agent types
+until you do.
+
+`/remove-project <name>` is the inverse. It never deletes your code — it prints the path and leaves
+the directory alone.
 
 ## Tests
 
@@ -282,13 +316,17 @@ cd demo-app && python3 -m pytest -q                                       # the 
 node standup/control/verify_design_quality.js --self-test                 # the design judge can still fail
 node standup/control/check_workflow_parse.js standup/standup.workflow.js  # the engine still loads
 node standup/control/tests/test_sdlc_routing.js                           # both entry paths still reach intake
+bash standup/control/tests/test_arm_path.sh                              # the exemption is armed in THIS install, not a neighbour
 bash standup/control/tests/test_setup_guard.sh                           # the installer survives a deleted demo-app
 bash standup/control/tests/test_precondition_parity.sh                   # every doc states the demo-app precondition the same way
 bash standup/control/tests/test_eval_resolver.sh                         # /eval says which cases it skipped, and why
+bash standup/control/tests/test_add_project.sh                          # /add-project's four invariants are checkable
+bash standup/control/tests/test_remove_project.sh                       # /remove-project edits surgically and keeps your code
 ```
 
-**Five of those take `--self-test`** — `verify_design_quality.js`, `test_sdlc_routing.js`,
-`test_setup_guard.sh`, `test_precondition_parity.sh`, `test_eval_resolver.sh` — which deliberately
+**Eight of those take `--self-test`** — `verify_design_quality.js`, `test_sdlc_routing.js`,
+`test_setup_guard.sh`, `test_precondition_parity.sh`, `test_eval_resolver.sh`, `test_arm_path.sh`, `test_add_project.sh`,
+`test_remove_project.sh` — which deliberately
 breaks the thing being judged and requires the judge to go red. Run it before trusting a green. The
 other three do not: the two pytest suites, and `check_workflow_parse.js`, which takes a **filename**
 and would read `--self-test` as one, reporting a missing file as if the engine were broken.
@@ -303,9 +341,10 @@ for `/standup`, with a Task-tool fallback. Windows is not currently supported. T
 model and the platform notes are in [`SECURITY.md`](SECURITY.md).
 
 - License [MIT](LICENSE) · changes [`CHANGELOG.md`](CHANGELOG.md)
-- CI runs the portal and demo-app suites, the workflow parse check, and every judge above —
-  each with its `--self-test` first — on pushes to `main` and on every pull request
-  (`.github/workflows/ci.yml`).
+- CI runs the portal and demo-app suites, the workflow parse check, and every judge above, on
+  pushes to `main` and on every pull request (`.github/workflows/ci.yml`). Each judge that takes
+  `--self-test` runs it first, except `verify_design_quality.js`, which CI runs **only** as
+  `--self-test` — proving it can still fail without needing a live URL in CI.
 
 ---
 

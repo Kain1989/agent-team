@@ -33,6 +33,10 @@ export const meta = {
 // it just quietly stops doing the thing you asked for. So: unparseable args THROW.
 // The real cure is on the calling side — hand the Workflow tool an OBJECT, not a JSON string;
 // objects never pass through hand-written escaping, so the failure mode disappears at source.
+// NOTE the second line of defence, added later: there is no longer any embedded roster to fall
+// back to, so a nulled `args` now stops at the roster guard instead of quietly polling a hardcoded
+// team. Both gates are load-bearing — the throw here is what keeps the DIAGNOSIS right. Soften it
+// and the user is told "args.roster was not provided" when the real fault was a stray quote.
 let A = args
 if (typeof A === 'string') {
   try { A = JSON.parse(A) }
@@ -121,47 +125,50 @@ You are the only role on this team that USES the product. Before this role exist
 const QA_FOCUS = 'Use the product AS A USER and report — do not review code or diffs. Each tick, pick 1-2 real user tasks (e.g. "see what is awaiting my approval and approve one", "read today\'s board and find the single top task"), run them from scratch on the live running instance, and record: which step you got stuck on, what was unreadable, which number disagreed with another screen, where it looks like nobody cared. Cover every UI the product has, rotate, do not fixate on one. You do NOT judge whether the design is good (that is the design lead) or whether a surface should exist (that is the PM) — you judge "can I get the thing done with it". Output must be reproducible: URL + steps + what you saw vs what you expected.'
 const QA_CHARTER = 'Your output is a WALKTHROUGH, not a restatement of a defect list. Every problem carries: which step you reached, what you were trying to do, what you saw, and why it stops you getting the thing done. You are allowed and encouraged to report "I can\'t say exactly what is wrong but something is off" — mark it a vibe and say what produced the feeling; that signal is exactly the kind every existing gate misses. Forbidden: running a machine check and copying its output (that is the design lead\'s job, and the machine already did it).'
 
-// Embedded fallback roster (source of truth: standup/team.json — the launcher passes it as args.roster).
-const EMBEDDED_ROSTER = {
-  teams: [
-    { id: 'demo_squad', name: 'Demo Dev Squad',
-      mission: 'Builds + maintains the bundled demo-app (a small Python library) through the full gated SDLC.',
-      coordination: 'Two paired developer-agents who challenge each other in fresh context; dev_a builds, dev_b reviews.',
-      review_surface: { kind: 'cli', label: 'demo-app test suite (textkit, a Python string library — no screen)',
-        url: '', inspect: 'cd demo-app && python3 -m pytest -q',
-        how: 'Run inspect from the repo root on a clean checkout; no venv, no network, no server.' },
-      developers: [
-        { id: 'dev_a', folder: 'demo-app', role: 'Developer — Builder',  git: true, active: true, pair: 'dev_b', focus: 'implement demo-app backlog items with tests', context: 'demo-app/README.md', tests: 'pytest (demo-app/tests)' },
-        { id: 'dev_b', folder: 'demo-app', role: 'Developer — Reviewer & Tests', git: true, active: true, pair: 'dev_a', focus: 'fresh-context plan/diff review, test coverage, edge cases', context: 'demo-app/README.md', tests: 'pytest (demo-app/tests)' },
-      ] },
-    { id: 'portal', name: 'Team Portal Squad',
-      mission: 'Builds + owns the local Mission Control portal (standup/portal) — the team status board + job approval inbox.',
-      coordination: 'FastAPI backend + a no-build static page integrate via a fixed JSON contract; the pair challenge each other.',
-      review_surface: { kind: 'web', label: 'Mission Control (local)', url: 'http://127.0.0.1:8770',
-        inspect: './setup.sh >/dev/null 2>&1 && (cd standup/portal && ./run_local.sh >/tmp/agent-team-portal.log 2>&1 &) && sleep 8 && curl -sS -f http://127.0.0.1:8770/healthz',
-        how: 'The prerequisite is INLINE in inspect on purpose: run_local.sh hard-exits "portal deps missing" unless fastapi+uvicorn import, so ./setup.sh (a network pip install) comes first. Then open the url in a real browser for the [JUDGMENT] rules.' },
-      developers: [
-        { id: 'portal_backend',  folder: 'standup/portal', role: 'Portal Dev — Backend & Jobs (FastAPI)', git: true, active: true, pair: 'portal_frontend', focus: 'parsers, the read+job API, the job lifecycle + guardrails', tests: 'pytest (portal/tests)' },
-        { id: 'portal_frontend', folder: 'standup/portal', role: 'Portal Dev — Mission Control UI', git: true, active: true, pair: 'portal_backend', focus: 'the single-window page + the approve/reject affordances', tests: 'the python API contract tests' },
-      ] },
-  ],
-  staff: [
-    { id: 'pm_agent', folder: 'standup', role: 'Product Manager Agent (Steve Jobs-grounded)', git: false, active: true,
-      focus: 'owns the board, says no, pins keystones, challenges plans for scope/direction', persona: PERSONA_PM },
-    { id: 'design_lead', folder: 'standup/portal', role: 'Design Lead — Clarity & Craft (Apple HIG)', git: true, active: true,
-      rubric: 'Apple HIG: clarity, deference, depth; contrast >=4.5:1, focus order, the states hover/focus/loading/error/empty.',
-      focus: 'owns the clarity + craft of the portal UI', persona: PERSONA_DESIGN_LEAD },
-    // product_qa — the one role whose whole job is to USE the product as a user (Playwright/curl) and
-    // report. needs_bash (not git): it operates the product, it does not patch source.
-    { id: 'product_qa', folder: 'standup/portal', scope_folders: ['standup/portal', 'demo-app'],
-      role: 'Product QA — user-perspective acceptance (actually uses the product every tick)',
-      git: false, needs_bash: true, active: true,
-      focus: QA_FOCUS, charter: QA_CHARTER, persona: PERSONA_PRODUCT_QA },
-  ],
-}
 
-let RAW = (A && A.roster) || EMBEDDED_ROSTER
-if (typeof RAW === 'string') { try { RAW = JSON.parse(RAW) } catch (e) { RAW = EMBEDDED_ROSTER } }
+// ---- ROSTER RESOLUTION — no embedded fallback ----
+// There used to be a hardcoded EMBEDDED_ROSTER here, used whenever args.roster was absent, falsy,
+// or an unparseable string. It made the worst failure in this engine silent: a run handed no
+// roster did not stop, it quietly worked a DIFFERENT team than the one in standup/team.json, and
+// reported green. Measured on five inputs — key absent, `undefined`, `''`, `{}` and a truncated
+// JSON string — every one produced a full, clean-looking tick against the embedded copy.
+//
+// Note the asymmetry that made it obviously wrong once seen: three lines above, an unparseable
+// `args` STRING throws. An unparseable `args.roster` string was caught and swallowed. Same
+// failure, same file, opposite treatment.
+//
+// Resolution is now recorded, not acted on, because `stopTick` is a `const` declared further down
+// and calling it here is a TDZ ReferenceError (the trap this file documents at the `verdict`
+// helper). Everything below tolerates an empty roster; the single guard after `stopTick` reports
+// it. One stop mechanism, one message vocabulary.
+let ROSTER_ERROR = null
+let RAW = (A && A.roster)
+if (typeof RAW === 'string') {
+  try { RAW = JSON.parse(RAW) }
+  catch (e) {
+    ROSTER_ERROR = `args.roster was a JSON string and failed to parse (${e.message})`
+    RAW = null
+  }
+}
+if (RAW && typeof RAW !== 'object') {
+  ROSTER_ERROR = `args.roster was a ${typeof RAW}, not an object`
+  RAW = null
+}
+// `{teams: "..."}` used to escape the stop vocabulary entirely: `.map` on a string threw a bare
+// TypeError, which still halts the run but in the shape of a crash rather than the three-line block
+// the reader is meant to get. Shape-check the two fields the engine actually walks.
+if (RAW && RAW.teams !== undefined && !Array.isArray(RAW.teams)) {
+  ROSTER_ERROR = `args.roster.teams was a ${typeof RAW.teams}, not an array`
+  RAW = null
+}
+if (RAW && RAW.staff !== undefined && !Array.isArray(RAW.staff)) {
+  ROSTER_ERROR = `args.roster.staff was a ${typeof RAW.staff}, not an array`
+  RAW = null
+}
+if (!RAW) {
+  if (!ROSTER_ERROR) ROSTER_ERROR = 'args.roster was not provided'
+  RAW = {}
+}
 const TEAMS = (RAW.teams || [{ id: 'workspace', name: 'Workspace', mission: '', coordination: '', developers: RAW.developers || [] }])
   .map(t => ({ ...t, developers: (t.developers || []).filter(d => d.active) }))
   .filter(t => t.developers.length > 0)
@@ -203,9 +210,43 @@ const stopTick = (what, validNoun, valid, fix) => {
   log(`  valid ${validNoun}: ${(valid && valid.length) ? valid.join(', ') : '(none declared in the roster)'}`)
   log(`  fix: ${fix}`)
   log(`TICK STOPPED ${DATE} — ${what}`)
-  const e = new Error(`STOP — ${what} | valid ${validNoun}: ${(valid || []).join(', ')} | fix: ${fix}`)
+  // Same rendering on both surfaces. The log said "(none declared in the roster)" while the thrown
+  // Error carried an empty string — and the caller sees the Error, so the one audience that gets a
+  // stack trace got the degraded version of the message.
+  const validText = (valid && valid.length) ? valid.join(', ') : '(none declared in the roster)'
+  const e = new Error(`STOP — ${what} | valid ${validNoun}: ${validText} | fix: ${fix}`)
   e.tickStopped = true
   throw e
+}
+
+// ---- THE ROSTER GUARD ----
+// Placed HERE, immediately after `stopTick` exists and before any phase runs. Not earlier: the
+// roster is resolved ~40 lines up, but `stopTick` is a `const` and reaching it from there is a TDZ
+// ReferenceError. Not later: a run with nobody on it must not reach a phase at all.
+//
+// Why an empty roster has to STOP rather than produce an empty board. Measured on three shapes —
+// `{}`, `{teams:[],staff:[]}`, and a roster whose every developer is `active:false` — the engine
+// produced BYTE-IDENTICAL output for all three, because `.filter(t => t.developers.length > 0)`
+// collapses "nobody active" and "no squads" into the same state. It ran Comms, Standup, Design,
+// Synthesize, Staff Pulse and **Arm**, then printed `TICK DONE — 0 task(s)`, which reads like
+// success. The Arm step is the expensive part of that: it writes `standup/control/team_run_active`
+// into the user's project and switches the supervisor gate OFF for six hours, on a run that was
+// never capable of doing anything. A first `/standup` on a fresh install did exactly this.
+if (ROSTER_ERROR) {
+  stopTick(
+    `no usable roster reached this run — ${ROSTER_ERROR}`,
+    'ways to pass one', [
+      'args.roster = the parsed contents of standup/team.json (an OBJECT, not a string)',
+    ],
+    'pass the roster verbatim on the Workflow call. There is deliberately no built-in fallback: '
+    + 'one silently ran a different team than standup/team.json and reported green.')
+}
+if (!DEVS.length) {
+  stopTick(
+    'the roster contains no ACTIVE developer, so there is no one to dispatch and nothing to report',
+    'active developers', DEVS.map(d => d.id),
+    'add a project with /add-project <git-url>, or set "active": true on a developer in '
+    + 'standup/team.json. (An all-inactive roster and an empty one are the same state here.)')
 }
 
 // Every terminal status the Work loop can produce is accounted for BY NAME. The old closing line
@@ -252,25 +293,97 @@ const personaOf = (m) => (m && m.persona) ? (m.persona + '\n\n——————
 // genuinely new rule has to LAND in DESIGN_RULEBOOK.md before it is citable (propose -> queue ->
 // land), instead of being minted at the point of use.
 const RULEBOOK_PATHS = ['DESIGN_RULEBOOK.md', '../DESIGN_RULEBOOK.md', 'standup/../DESIGN_RULEBOOK.md']
-// Fallback ONLY — same contract as EMBEDDED_ROSTER above: the FILE is the source of truth, and
-// RULE_IDS_SOURCE reports which one was used (a silently-embedded copy drifting from the rulebook
-// would be this same bug wearing the other mask).
+// Fallback ONLY. The FILE is the source of truth; a silently-embedded copy drifting from the
+// rulebook is the same disease the roster fallback above was deleted for.
+// Regenerated from DESIGN_RULEBOOK.md. It had drifted SEVEN rules behind (stopped at E-07 while
+// the rulebook defines through F-07), and this commit makes the fallback MORE reachable — a
+// rejected neighbour rulebook now lands here too. Under the no-fs degrade the design lens would
+// be told only 25 ids are citable, and E-01 would reject every F-* finding, including the F
+// rules this repo's own judges cite. A drifting embedded copy is precisely the disease the
+// roster fallback above was deleted for.
 const EMBEDDED_RULE_IDS = ['A-01','A-02','A-03','A-04','B-01','B-02','B-03','B-04','B-05','B-06',
-  'C-01','C-02','C-03','C-04','D-01','D-02','D-03','D-04','E-01','E-02','E-03','E-04','E-05','E-06','E-07']
+  'C-01','C-02','C-03','C-04','D-01','D-02','D-03','D-04','E-01','E-02','E-03','E-04','E-05',
+  'E-06','E-07','F-01','F-02','F-03','F-04','F-05','F-06','F-07']
+
+// ---- WHICH rulebook, and PROVING it is this install's ----
+// These candidates are RELATIVE, and relative to a cwd this engine does not control. Measured on
+// one machine with two agent-team trees: from the host checkout it read the HOST's rulebook (has
+// B-12, no F-01); from the plugin it read the plugin's (has F-01, no B-12) — and BOTH runs
+// reported the identical `rulebook_source: "DESIGN_RULEBOOK.md"`. That is not cosmetic: read the
+// wrong one and the plugin's own F-01..F-07 are rejected by E-01 as rules that "do not exist",
+// while a neighbour's B-12 becomes citable. Exactly the Arm-path bug, one function away.
+//
+// Two things therefore changed. The reported source is now the RESOLVED ABSOLUTE path plus the
+// number of ids found, so two candidates can never report the same string. And a candidate is only
+// accepted once it is shown to belong to THIS run: the directory holding it must also hold
+// `standup/team.json` whose team ids match the roster this run was handed. That check is the same
+// identity assertion the Arm step makes, for the same reason — "a file was found" and "the right
+// file was found" are different claims.
+//
+// FILESYSTEM ACCESS IS NOT GUARANTEED, AND HAS NEVER BEEN OBSERVED IN THE REAL HOST. This file
+// says elsewhere that workflow scripts have no filesystem access; `RULE_IDS_SOURCE` only ever
+// entered the return object and was never logged, so across 27 recorded runs there is no evidence
+// either way. It stopped mattering rather than being resolved: no-fs is a DEGRADE (embedded ids,
+// and the source says so plainly) and never a stop, because failing a run over a design-rule id
+// list would trade a silent bug for an outage. The Arm step deliberately needs no fs at all.
+const ROSTER_TEAM_IDS = (RAW.teams || []).map(t => t && t.id).filter(Boolean).sort().join(',')
 let RULE_IDS = null
-let RULE_IDS_SOURCE = 'embedded fallback (DESIGN_RULEBOOK.md unreadable from this harness)'
-try {
-  const _fs = await import('node:fs')
+let RULE_IDS_SOURCE = null
+let _fsMod = null
+try { _fsMod = await import('node:fs') } catch (e) { _fsMod = null }
+if (!_fsMod || typeof _fsMod.readFileSync !== 'function') {
+  RULE_IDS_SOURCE = 'unavailable — this harness gives the engine no filesystem access; using the '
+    + 'embedded id set. Findings citing a rule added since this engine shipped will be rejected.'
+} else {
+  const _readIf = (f) => { try { return _fsMod.readFileSync(f, 'utf8') } catch (e) { return null } }
+  const _abs = (f) => { try { return _fsMod.realpathSync(f) } catch (e) { return f } }
+  const _dirOf = (f) => { const i = _abs(f).lastIndexOf('/'); return i > 0 ? _abs(f).slice(0, i) : '.' }
+  const _rejected = []
   for (const p of RULEBOOK_PATHS) {
-    let src = null
-    try { src = _fs.readFileSync(p, 'utf8') } catch (e) { continue }
+    const src = _readIf(p)
+    if (src === null) continue
     // Wide family match (A-Z, not just today's A-E) so a NEW rule family is citable the moment it
     // lands in the rulebook, with no edit here.
     const ids = String(src).match(/\b[A-Z]-\d{2}\b/g)
-    if (ids && ids.length) { RULE_IDS = new Set(ids); RULE_IDS_SOURCE = p; break }
+    if (!ids || !ids.length) continue
+
+    // Identity. Without a roster to compare against there is nothing to check, so say `unverified`
+    // rather than implying a check happened — the failure mode being fixed is a confident report.
+    let verdictNote = ' (identity unverified: this run was handed no team ids to compare)'
+    if (ROSTER_TEAM_IDS) {
+      const tj = _readIf(_dirOf(p) + '/standup/team.json')
+      let found = null
+      try { found = tj === null ? null : (JSON.parse(tj).teams || []).map(t => t && t.id).filter(Boolean).sort().join(',') }
+      catch (e) { found = null }
+      if (found === null) {
+        // Unverifiable is REJECTED, not accepted-with-a-note. Reporting the divergence is not
+        // enough on its own: the neighbouring tree that triggered this has no F-* family, so
+        // accepting it makes every F-01..F-07 citation "an unknown rule" under E-01 — the exact
+        // damage, merely now with a footnote. A rulebook that cannot be shown to be this
+        // install's is worth less than the embedded set, which at least ships with this engine.
+        _rejected.push(`${_abs(p)} [no readable standup/team.json beside it]`)
+        continue
+      } else if (found !== ROSTER_TEAM_IDS) {
+        _rejected.push(`${_abs(p)} [teams: ${found || '(none)'}]`)
+        continue                       // belongs to a DIFFERENT install — keep looking
+      } else {
+        verdictNote = ''
+      }
+    }
+    RULE_IDS = new Set(ids)
+    RULE_IDS_SOURCE = `${_abs(p)} (${RULE_IDS.size} ids)${verdictNote}`
+    break
   }
-} catch (e) { /* no fs in this harness — fall through to the embedded set */ }
+  if (!RULE_IDS) {
+    RULE_IDS_SOURCE = 'embedded fallback — no DESIGN_RULEBOOK.md belonging to this install was '
+      + `readable from cwd${_rejected.length ? `; rejected as another install's: ${_rejected.join(' , ')}` : ''}`
+  }
+}
 if (!RULE_IDS) RULE_IDS = new Set(EMBEDDED_RULE_IDS)
+// LOGGED, not merely returned. This value only ever entered the result object, which is exactly why
+// "27 recorded runs carry no evidence of whether this harness has filesystem access" was true and
+// would have stayed true. One line turns the next real tick into that evidence.
+log(`RULEBOOK: ${RULE_IDS.size} citable rule id(s) — source: ${RULE_IDS_SOURCE}`)
 const RULE_ID_LIST = [...RULE_IDS].sort().join(' ')
 
 // Detection is DELIBERATELY wider than the legal set: an invented "F-99" must register as a
@@ -945,12 +1058,27 @@ const ARM_SCHEMA = {
   type: 'object',
   required: ['flag_present', 'detail'],
   properties: {
-    flag_present: { type: 'boolean' },
-    set_by_me:    { type: 'boolean' },
-    detail:       { type: 'string' },
+    flag_present:  { type: 'boolean' },
+    set_by_me:     { type: 'boolean' },
+    detail:        { type: 'string' },
+    resolved_root: { type: 'string' },
+    flag_realpath: { type: 'string' },
+    team_ids:      { type: 'string' },
+    dev_ids:       { type: 'string' },
   },
 }
 const ARM_RUN_ID = `engine-${DATE}`
+// Set by the Arm step once it has resolved and VERIFIED the install root, so teardown
+// disarms the same tree it armed. Teardown used to use the same relative paths Arm did, so
+// on the layout that made Arm hit a neighbour, teardown would have cleared the neighbour's
+// flag too — switching that install's gate back on mid-run.
+let ARM_RESOLVED_ROOT = null
+// What the engine expects the resolved install to contain. Derived from RAW (the roster as handed
+// in) and NOT from TEAMS/DEVS: those are filtered to active members, while the file on disk lists
+// everyone, so comparing them would mismatch on every roster with an inactive entry.
+const ARM_EXPECT_TEAMS = ROSTER_TEAM_IDS
+const ARM_EXPECT_DEVS = (RAW.teams || [])
+  .flatMap(t => (t && t.developers) || []).map(d => d && d.id).filter(Boolean).sort().join(',')
 async function armTeamRunExemption() {
   const r = await agent(
     `You are this run's ARM step. Do exactly one thing, then return.
@@ -962,24 +1090,51 @@ get classified as the EM and their writes are hard-blocked. The run then complet
 diff and reports review-failed. standup/control/team_run_active is the exemption flag that exists
 for precisely this, and it must be armed BEFORE any dev agent runs.
 
-Do this:
-1. Locate the flag helper. Try these in order, use the first that exists:
-     standup/control/team_run_flag.sh
-     ../standup/control/team_run_flag.sh
-   If neither exists, fall back to appending the record yourself — create the directory first:
-     mkdir -p standup/control && printf '%s | %s | %s\\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${ARM_RUN_ID}" "auto-armed by standup engine" >> standup/control/team_run_active
-   (Appending is deliberate: another run may share this flag; never overwrite it.)
-2. If you used the helper, run:  bash <path> set ${ARM_RUN_ID} "auto-armed by standup engine"
-3. VERIFY the file now exists — \`ls -l standup/control/team_run_active\` — and read it back.
+RELATIVE PATHS ARE THE HAZARD HERE, NOT A CONVENIENCE. This step used to try
+\`standup/control/team_run_flag.sh\` relative to your cwd. On a machine with a second agent-team
+tree that resolved to the NEIGHBOUR's script, and armed the neighbour's control plane — a test run
+of one install silently switched off the gate of another. Where no such tree exists it instead
+created a fresh empty directory and wrote there, which the old check (\`ls\` on a path \`mkdir -p\`
+had just guaranteed) confirmed happily. Resolve an ABSOLUTE root first, then use only absolute
+paths.
+
+Do this, in order:
+1. RESOLVE THE INSTALL ROOT. Starting at \`$(pwd)\` and walking UP one directory at a time, take the
+   FIRST directory that contains BOTH \`standup/team.json\` AND \`standup/standup.workflow.js\`.
+   Stop at the first match — with nested installs the nearest one is the right one.
+     ROOT=""; D="$(pwd)"
+     while [ "$D" != "/" ]; do
+       if [ -f "$D/standup/team.json" ] && [ -f "$D/standup/standup.workflow.js" ]; then ROOT="$D"; break; fi
+       D="$(dirname "$D")"
+     done
+   If ROOT is empty, STOP and report flag_present:false with detail saying the root was not found
+   and what \`pwd\` was. Do not invent a directory; do not \`mkdir\` anything.
+2. ARM, with an absolute path:
+     bash "$ROOT/standup/control/team_run_flag.sh" set ${ARM_RUN_ID} "auto-armed by standup engine"
+   (The helper appends and writes beside ITSELF, so an absolute path here decides everything.)
+   If that script does not exist, STOP and report flag_present:false. Do not hand-append; a file
+   written somewhere the gate does not read is worse than no file, because it reports success.
+3. VERIFY, with the same absolute path:
+     bash "$ROOT/standup/control/team_run_flag.sh" status
+   flag_present is true ONLY if that output contains the exact words \`team_run_active PRESENT\`.
+   That string is the point: the old check ran \`ls\` on a path the previous line had just created,
+   so it could not fail. This one comes from the flag's own reader.
+4. REPORT WHICH INSTALL YOU TOUCHED — this is what proves you armed OURS and not a neighbour's:
+     realpath "$ROOT/standup/control/team_run_active"
+     python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(','.join(sorted(t['id'] for t in d.get('teams',[]) if t.get('id')))); print(','.join(sorted(x['id'] for t in d.get('teams',[]) for x in t.get('developers',[]) if x.get('id'))))" "$ROOT/standup/team.json"
+   The first printed line is team_ids, the second is dev_ids. Copy them EXACTLY, including the
+   commas and the ordering. Do not re-sort, summarise, or tidy them.
 
 Return:
-- flag_present: true ONLY if step 3 confirmed the file exists. If you did not confirm it, return
-  false. Do not fill in true optimistically.
+- flag_present: true ONLY if step 3 printed \`team_run_active PRESENT\`. Never optimistically.
 - set_by_me: true if you added a record this run (appending alongside an existing one counts).
-- detail: one line — which path you used and what the file contains now. If you could not create
-  it, say so here explicitly.
+- resolved_root: the ROOT from step 1, absolute.
+- flag_realpath: the realpath from step 4.
+- team_ids / dev_ids: the two lines from step 4, verbatim.
+- detail: one line — which root you used and what \`status\` reported. If anything stopped you, say
+  so here explicitly rather than filling the other fields in hopefully.
 
-Do nothing else. Do not read the roster, the backlog, or any code.`,
+Do nothing else. Do not read the backlog or any code. Do not edit team.json.`,
     { label: 'arm:team_run_active', phase: 'Arm', schema: ARM_SCHEMA, effort: 'low' }
   )
   if (!r || r.flag_present !== true) {
@@ -988,12 +1143,50 @@ Do nothing else. Do not read the roster, the backlog, or any code.`,
       + 'run the whole gated SDLC while every dev-agent write is blocked by the supervisor gate, '
       + 'producing an empty diff and a misleading "review-failed". '
       + 'Agent returned: ' + JSON.stringify(r || null)
-      + ' — Fix: create standup/control/team_run_active (or run standup/control/team_run_flag.sh '
-      + 'set <run-id> "<note>"), confirm it exists, then relaunch.'
+      + ' — Fix: run standup/control/team_run_flag.sh set <run-id> "<note>" from the install root, '
+      + 'confirm `status` prints "team_run_active PRESENT", then relaunch.'
     )
   }
-  log(`ARM: team_run_active armed (${ARM_RUN_ID}) — dev agents can write their project folder. ${r.detail || ''}`)
-  return r
+
+  // ---- IDENTITY: did we arm OUR install, or a neighbour's? ----
+  // The verification inside the agent cannot answer this, and that is the whole point: a
+  // neighbouring install's helper reports `team_run_active PRESENT` perfectly truthfully — about
+  // the wrong repo. A writer checking its own work will always agree with itself, so the check has
+  // to come from something the writer did not choose: the roster THIS run was handed, which lives
+  // in memory here and was never on that agent's path.
+  //
+  // Deliberately a projection of sorted ids, not a deep compare. The question is "is this the same
+  // install", and any formatting, ordering, or unrelated-field difference would make a deep compare
+  // fail on installs that are in fact correct — a gate that fires on correct input gets disabled.
+  const armTeams = String((r.team_ids != null ? r.team_ids : '')).trim()
+  const armDevs  = String((r.dev_ids  != null ? r.dev_ids  : '')).trim()
+  let armSource
+  if (!ARM_EXPECT_TEAMS && !ARM_EXPECT_DEVS) {
+    // Unreachable while the roster guard stands, but stated rather than assumed: with nothing to
+    // compare against, say so instead of implying a check happened.
+    armSource = `unverified (this run carries no team/dev ids to compare) root=${r.resolved_root || '?'}`
+  } else if (!armTeams && !armDevs) {
+    armSource = `unverified (the arm step reported no ids back) root=${r.resolved_root || '?'}`
+    log(`ARM: WARNING — could not confirm which install was armed. ${armSource}`)
+  } else if (armTeams !== ARM_EXPECT_TEAMS || armDevs !== ARM_EXPECT_DEVS) {
+    throw new Error(
+      'ARM armed the WRONG install. The exemption flag was written to a tree whose standup/team.json '
+      + 'does not match the roster this run was handed, which means the gate is now off somewhere '
+      + 'else and still on here — every dev-agent write would be blocked and reported as '
+      + '"review-failed". '
+      + `Armed root: ${r.resolved_root || '(not reported)'} | flag: ${r.flag_realpath || '(not reported)'}`
+      + ` | that tree's teams: [${armTeams}] devs: [${armDevs}]`
+      + ` | this run's roster teams: [${ARM_EXPECT_TEAMS}] devs: [${ARM_EXPECT_DEVS}]`
+      + ' — Fix: launch the Workflow with a cwd inside the install you mean to run, and pass that '
+      + "install's standup/team.json as args.roster."
+    )
+  } else {
+    armSource = `verified root=${r.resolved_root || '?'}`
+    ARM_RESOLVED_ROOT = r.resolved_root || null
+  }
+  log(`ARM: team_run_active armed (${ARM_RUN_ID}) — dev agents can write their project folder. `
+    + `${armSource}. ${r.detail || ''}`)
+  return Object.assign({}, r, { arm_source: armSource })
 }
 // Teardown. Never the real safety mechanism — a crashed run never reaches it — that is the gate's
 // own 6h TTL. This only keeps a normally-finished run from leaving the gate off for hours. It
@@ -1003,10 +1196,17 @@ async function disarmTeamRunExemption() {
     await agent(
       `You are this run's DISARM teardown step. Do exactly one thing, then return.
 
-Remove THIS run's record (${ARM_RUN_ID}) from standup/control/team_run_active.
-If standup/control/team_run_flag.sh exists, use:  bash <path> clear ${ARM_RUN_ID}
-Otherwise edit the file by hand: drop only the line containing ${ARM_RUN_ID}; if that leaves the
-file empty, delete the file.
+${ARM_RESOLVED_ROOT
+  ? `The install root was resolved and VERIFIED during Arm. Use it, absolute, and touch nothing else:
+  ROOT="${ARM_RESOLVED_ROOT}"
+  bash "$ROOT/standup/control/team_run_flag.sh" clear ${ARM_RUN_ID}`
+  : `Arm did not leave a verified root behind, so there is NO safe absolute path to clear. Do NOT
+guess one with a relative path: the same relative lookup is what let Arm write into a neighbouring
+install in the first place, and clearing the wrong flag switches THAT install's gate back on
+mid-run. Report that you skipped teardown and why. The gate's own 6h TTL is the backstop here —
+that is exactly what it is for.`}
+
+Remove only THIS run's record (${ARM_RUN_ID}).
 
 CRITICAL: if any OTHER run's record is still in the file, leave the file in place. Deleting it
 would switch the supervisor gate back on in the middle of that run and block all of its writes.

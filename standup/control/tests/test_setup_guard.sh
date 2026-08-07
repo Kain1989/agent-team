@@ -64,14 +64,18 @@ extract_section5() {
     index($0, b) { inside = 1 }
     inside { print }
   ' "$src"
-  # Guard against the window silently collapsing: everything from the marker to EOF must include
-  # BOTH demo-app-conditional blocks the installer now has. If a future edit moves one above the
-  # marker, this judge stops covering it — and stops saying so.
-  local n; n="$(awk -v b="$BEGIN_MARK" 'index($0,b){i=1} i' "$src" | grep -c '\[\[ -d "\$DEMO" \]\]')"
-  [[ "$n" -ge 2 ]] || die_judge "the slice contains $n \`[[ -d \"\$DEMO\" ]]\` block(s), expected >= 2.
-      setup.sh guards the sample section AND the closing hints. If one moved above
-      '$BEGIN_MARK', it is now outside this judge's window and unproven — move the marker or
-      add a second slice. A window that quietly stops covering code reports green over it."
+}
+
+# How many `[[ -d "$DEMO" ]]` blocks the slice actually covers. RECORDED, never fatal.
+#
+# It used to `die_judge` right here, and that pre-empted every real case: on a tree carrying a
+# genuine installer bug the judge exited 3 saying "move the marker or add a second slice" — naming
+# ITSELF as the thing to fix — while the actual defect (`DEMO_PRESENT: unbound variable`) went
+# unmentioned. The previous revision of this same judge had reported that defect correctly as
+# `2 check(s) FAILED`. A diagnosis that points at the wrong subject is worse than a late one, so
+# the cases now run and the shortfall is reported beside them.
+coverage_blocks() { # <setup.sh path>
+  awk -v b="$BEGIN_MARK" 'index($0,b){i=1} i' "$1" | grep -c '\[\[ -d "\$DEMO" \]\]'
 }
 
 # Build a runnable script: the same `set` line the installer uses, the ROOT/PY preamble section 5
@@ -111,6 +115,12 @@ cleanup_case() { [[ -n "${LAST_DIR:-}" && "$LAST_DIR" == /*/* ]] && rm -rf "$LAS
 # ---------- the cases ----------
 run_cases() { # <section5-text> <label-prefix>
   local body="$1" pfx="${2:-}"
+
+  section "${pfx}0. the window still covers the code it claims to"
+  local nblocks; nblocks="$(coverage_blocks "$SETUP")"
+  check "${pfx}the slice covers both demo-app guards" \
+    "$([[ "$nblocks" -ge 2 ]] && echo 1 || echo 0)" \
+    "found $nblocks — setup.sh guards the sample section AND the closing hints; fewer means one moved above the marker and is unproven. The cases below still ran: read them first."
 
   section "${pfx}A. the sample is present — the installer still sets it up"
   run_case yes "$body"
@@ -191,38 +201,50 @@ self_test() {
   # An exit code that is never asserted is not a contract. Both die_judge call sites in
   # extract_section5 sat inside a command substitution, so their `exit 3` killed a subshell and
   # the script sailed on to print "all checks PASS" and exit 0 — announcing its own blindness on
-  # stderr while CI read the code and went green. Two fixtures, one per die_judge branch, run the
-  # judge as a REAL subprocess through the STANDUP_SETUP_SH seam, so the assertion is on the
-  # process exit status a CI step actually reads.
+  # stderr while CI read the code and went green.
+  #
+  # There is exactly ONE die_judge branch left here (the missing begin marker); the coverage
+  # shortfall is now an ordinary reported failure, because a fatal there pointed the diagnosis at
+  # this judge instead of at the installer. The earlier claim of "two fixtures, one per branch" was
+  # never true even when there were two: a no-marker fixture yields an empty slice, so the coverage
+  # branch fired first and the marker branch could not be a sole cause of anything. Both fixtures
+  # below therefore assert the MESSAGE as well as the status — a code alone cannot tell you which
+  # branch spoke.
   printf '\n=== --self-test: the exit-3 contract is asserted, not assumed ===\n'
   local e3dir; e3dir="$(mktemp -d)"
-  local e3fails=0
+  local e3fails=0 out rc
 
   printf 'set -e\n# an installer with no section-5 marker at all\necho hi\n' > "$e3dir/no_marker.sh"
-  STANDUP_SETUP_SH="$e3dir/no_marker.sh" bash "$0" >/dev/null 2>&1
-  local rc_marker=$?
-  check "missing begin marker exits 3 (not 0)" \
-    "$([[ $rc_marker -eq 3 ]] && echo 1 || echo 0)" "exit=$rc_marker"
-  [[ $rc_marker -eq 3 ]] || e3fails=1
+  out="$(STANDUP_SETUP_SH="$e3dir/no_marker.sh" bash "$0" 2>&1)"; rc=$?
+  check "missing begin marker exits 3 (not 0)" "$([[ $rc -eq 3 ]] && echo 1 || echo 0)" "exit=$rc"
+  check "and says the MARKER is missing, not something else" \
+    "$(grep -q 'begin marker not found' <<<"$out" && echo 1 || echo 0)" \
+    "$(head -c 90 <<<"$out" | tr '\n' ' ')"
+  [[ $rc -eq 3 ]] && grep -q 'begin marker not found' <<<"$out" || e3fails=1
 
-  # Marker present, but only ONE guard block below it -> the coverage check must fire and PROPAGATE.
+  # Marker present, one guard block below it -> a REPORTED failure (exit 1), and the real cases
+  # must still have run. Exit 3 here would be the pre-emption this was changed to stop.
   { echo 'set -e'; echo "$BEGIN_MARK"; echo 'DEMO="$ROOT/demo-app"';
     echo 'if [[ -d "$DEMO" ]]; then echo one; fi'; } > "$e3dir/one_guard.sh"
-  STANDUP_SETUP_SH="$e3dir/one_guard.sh" bash "$0" >/dev/null 2>&1
-  local rc_cov=$?
-  check "a slice that stopped covering the code exits 3 (not 0)" \
-    "$([[ $rc_cov -eq 3 ]] && echo 1 || echo 0)" "exit=$rc_cov"
-  [[ $rc_cov -eq 3 ]] || e3fails=1
+  out="$(STANDUP_SETUP_SH="$e3dir/one_guard.sh" bash "$0" 2>&1)"; rc=$?
+  check "a thinner slice FAILS (exit 1) rather than pre-empting with exit 3" \
+    "$([[ $rc -eq 1 ]] && echo 1 || echo 0)" "exit=$rc"
+  check "and the real cases still ran underneath it" \
+    "$(grep -q 'the sample was deleted' <<<"$out" && echo 1 || echo 0)" \
+    "a coverage complaint must never replace the installer's own verdict"
+  [[ $rc -eq 1 ]] && grep -q 'the sample was deleted' <<<"$out" || e3fails=1
 
   rm -rf "$e3dir"
   if [[ $e3fails -ne 0 ]]; then
-    printf '\n!! SELF-TEST FAILED — the judge reported itself broken and still exited 0.\n' >&2
+    printf '\n!! SELF-TEST FAILED — the judge did not report its own breakage the way it claims.\n' >&2
     printf '   `exit 3` inside a command substitution kills only the subshell; the call sites\n' >&2
     printf '   need `|| exit $?`. CI reads the exit code and nothing else.\n' >&2
     return 3
   fi
 
-  printf '\n--self-test → PASS  (case B went red by name; exit-3 contract holds; %d check(s) total)\n' "$fails"
+  # `$fails` is the count that went RED, which is the meaningful number here — the old wording
+  # called it "total" while printing it, so it read as though the whole suite were four checks.
+  printf '\n--self-test → PASS  (case B went red by name; exit-3 contract holds; %d check(s) red)\n' "$fails"
   return 0
 }
 
