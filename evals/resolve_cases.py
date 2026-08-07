@@ -111,9 +111,18 @@ def main() -> int:
         print("  %s %-22s %s" % (mark, p["id"], p["reason"]))
 
     if not runnable:
+        # Two different states reach here and the reason must not be shared between them. With
+        # `cases: []` — which is what a fresh install ships — "every case is bound to a directory
+        # that is not in this checkout" is FALSE: there are no cases at all. The verdict was right
+        # and the reason it gave was made up, which is the more corrosive half, because the reader
+        # goes looking for a directory that was never named.
         print("")
-        print("Nothing to run here. This is a stated result, not a silent one:")
-        print("  * every case is bound to a directory that is not in this checkout;")
+        if not plan:
+            print("Nothing to run here. This is a stated result, not a silent one:")
+            print("  * evals/cases.json defines no cases yet — that is what a fresh install ships;")
+        else:
+            print("Nothing to run here. This is a stated result, not a silent one:")
+            print("  * every case is bound to a directory that is not in this checkout;")
         print("  * add a case for your own project (copy one and set `target` + `requires`), or")
         print("  * copy `_example_case` from evals/cases.json and point it at your project.")
     return 0

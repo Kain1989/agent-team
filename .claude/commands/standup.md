@@ -6,7 +6,7 @@ Run the agent team's full standup + gated work cycle now. Do it; don't just desc
 
 1. **Read `standup/team.json`** (the full roster) and confirm today's date (`date +%Y-%m-%d`).
 
-3. **Run the whole squad via the Workflow tool** — per-dev standup → squad sync → design pass →
+2. **Run the whole squad via the Workflow tool** — per-dev standup → squad sync → design pass →
    EM board → light staff pulse → the gated SDLC on the top autoworkable task:
    ```
    Workflow({ scriptPath: "standup/standup.workflow.js",
@@ -21,7 +21,7 @@ Run the agent team's full standup + gated work cycle now. Do it; don't just desc
    build has no `Workflow` tool, read the canonical list and run those steps; do not re-fork it
    into this file.)
 
-4. **Close out the tick:** summarize the EM board, what was worked, the green/committed counts,
+3. **Close out the tick:** summarize the EM board, what was worked, the green/committed counts,
    and any commits on project feature branches. Append a `## standup (<today>)` section to
    `standup/log/<today>.md` (create it if missing) and update the "Last updated" line in
    `standup/BACKLOG.md`.

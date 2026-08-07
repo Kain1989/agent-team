@@ -17,8 +17,10 @@ there is no second recipe to drift. The canonical step list lives in `standup/te
 1. **The target must be a git repo with a commit.** `/add-project` guarantees that for every
    project it creates; if you are pointing at something it did not create, check first.
 2. **Read `standup/team.json`** and pick the `assignee` — a developer id from the squad that owns the
-   work (e.g. `portal_backend` for the portal, or a developer `/add-project` created). Pass the roster **verbatim**;
-   a trimmed roster silently degrades the run.
+   work. Take it from the roster you just read; do not type one from memory. A fresh install ships
+   `teams: []`, so until you have run `/add-project` (or `/add-team` + `/add-role`) there is no
+   legal assignee at all and the engine will say so. Pass the roster **verbatim**; a trimmed roster
+   silently degrades the run.
 3. **Run the task through the engine:**
    ```
    Workflow({ scriptPath: "standup/standup.workflow.js",
