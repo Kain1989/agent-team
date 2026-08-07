@@ -37,6 +37,58 @@ import sys
 SURFACE_KINDS = ("web", "report", "agent", "api", "cli", "none")
 
 
+def illegal_project_name(name):
+    """Why `name` cannot be a project name — or None if it can.
+
+    `name` is THREE things at once: a directory under the root, the `teams[].id`, and the prefix
+    of the two developer ids. It has to be legal as all three, and the third is the one that bites.
+
+    /add-project's Step 1a states this refusal, and until now that is ALL it was — prose. Measured:
+    a `standup/portal` project, hand-built exactly the way the README instructed, scored
+    `12 check(s), 0 failed`. The consequences it sailed past:
+
+      * `/sync-roster` dies. `agents_gen` writes `.claude/agents/<dev id>.md`, so a dev id of
+        `standup/portal_a` becomes `.claude/agents/standup/portal_a.md` — a directory that does not
+        exist. FileNotFoundError, and /sync-roster is the `NEXT — required` step of /add-project.
+      * `..` in a name would put that write OUTSIDE `.claude/agents/` entirely.
+      * the local bare origin template `<ROOT>/.<name>-origin.git` becomes
+        `<ROOT>/.standup/portal-origin.git` — a hidden `.standup/` in the root, colliding with the
+        per-developer progress-file convention.
+
+    This is the executable half of the prose rule, so it can be judged and cannot quietly stop
+    being followed. It deliberately does NOT reject `.` inside a name: measured,
+    `Path("a.b.md").stem` is `"a.b"`, so a dotted id round-trips through agents_gen's prune step
+    intact. Refusing it would be a guess, and this file's rule is to refuse what is measured.
+    """
+    if not isinstance(name, str) or not name.strip():
+        return "it is empty"
+    if "/" in name or "\\" in name:
+        return ("it contains a path separator. `name` is the directory, the squad id AND the "
+                "developer-id prefix, so `%s_a` becomes a dev id with a `/` in it and "
+                "/sync-roster writes .claude/agents/%s_a.md — a directory that does not exist" % (name, name))
+    if name in (".", ".."):
+        return "it is a relative-path component, not a directory name"
+    if name != name.strip():
+        return "it has leading or trailing whitespace"
+    if " " in name or "\t" in name:
+        return "it contains whitespace"
+    if name.startswith("-"):
+        return "it starts with `-`, which every command that takes it will read as a flag"
+    if "\n" in name or "\0" in name:
+        return "it contains a newline or a null byte"
+    return None
+
+
+def management_head(name):
+    """The first path segment of `name` — what the deny list must actually be compared against.
+
+    `standup/portal` is management territory just as surely as `standup` is, and the check used to
+    compare the WHOLE string, so `hooks` was refused while `standup/portal` passed. For an ordinary
+    single-segment name this returns the name unchanged, so nothing else moves.
+    """
+    return str(name).replace("\\", "/").split("/", 1)[0]
+
+
 def _fail(results, name, detail):
     results.append((False, name, detail))
 
@@ -220,10 +272,22 @@ def committed_secret_files(dirpath):
 def check_added(root, name, results):
     roster, _ = load_roster(root)
 
+    # 0. the name is usable at all. Checked FIRST and INDEPENDENTLY of the deny list below: the two
+    # overlap on `standup/portal` but neither implies the other (`sub/proj` is illegal and not
+    # management; `hooks` is management and perfectly legal), so each needs its own covering case.
+    bad_name = illegal_project_name(name)
+    if bad_name:
+        _fail(results, "the name is usable as a directory, a squad id and a dev-id prefix",
+              "%r cannot be a project name: %s. Pick a plain directory name and re-add it."
+              % (name, bad_name))
+    else:
+        _ok(results, "the name is usable as a directory, a squad id and a dev-id prefix")
+
     # 1. the directory exists and is a git repo with an origin
     # The name must not collide with management territory. Checked case-insensitively for the same
-    # reason as the squad id below.
+    # reason as the squad id below, and on the first path SEGMENT so a sub-path cannot slip under it.
     owned = em_owned_names(root)
+    head = management_head(name)
     if owned is None:
         # _fail, not _ok. The docstring above already said this reports NOT CHECKED and FAILS, and
         # the sibling `check_removed` takes the same line ("a check that cannot fail is not a
@@ -236,11 +300,14 @@ def check_added(root, name, results):
               "management-path deny list could not be derived — NOT CHECKED. Copy "
               "hooks/supervisor_gate.py into this project, or run the check from the plugin "
               "checkout." % root)
-    elif name.lower() in {o.lower() for o in owned}:
+    elif head.lower() in {o.lower() for o in owned}:
+        # Name the SEGMENT that matched when it is not the whole name, so `standup/portal` reads as
+        # "under standup" rather than repeating itself back at the reader.
+        subject = "%r is" % name if head == name else "%r is under %r, which is" % (name, head)
         _fail(results, "the name is not management territory",
-              "%r is a path the supervisor gate classifies as management/governance, not project "
+              "%s a path the supervisor gate classifies as management/governance, not project "
               "territory. Adopting it would point a dev squad at the plugin's own control plane. "
-              "Pick another name." % name)
+              "Pick another name." % subject)
     else:
         _ok(results, "the name is not management territory")
 

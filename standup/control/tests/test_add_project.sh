@@ -255,6 +255,24 @@ run_cases() { # <label-prefix>
     "hooks/ and skills/ were both missing from a hand-written copy of this list"
   rm -rf "$d"
 
+  # --- the two refusals that lived ONLY in the skill's prose.
+  # Step 1a of skills/add-project/SKILL.md refuses a `name` containing `/`, and refuses a name that
+  # is management territory. Neither was in the checker. Measured on a fixture: a squad
+  # `standup/portal`, hand-adopted exactly the way the README told people to, scored
+  # "12 check(s), 0 failed" and exit 0 — the checker signed off on a dev squad pointed at the
+  # engine's own control plane, with dev ids that crash /sync-roster.
+  d="$(build_project)"; apply_add "$d" "sub/proj" none 2>/dev/null; verify "$d/proj" "sub/proj"
+  check "${pfx}a name containing a path separator is caught" \
+    "$([[ $LAST_RC -eq 1 ]] && grep -q 'FAIL the name is usable as a directory, a squad id and a dev-id prefix' <<<"$LAST_OUT" && echo 1 || echo 0)" \
+    "name is all three at once; a / makes the dev id \`sub/proj_a\`, and /sync-roster then writes .claude/agents/sub/proj_a.md into a directory that does not exist"
+  rm -rf "$d"
+
+  d="$(build_project)"; apply_add "$d" "standup/portal" none 2>/dev/null; verify "$d/proj" "standup/portal"
+  check "${pfx}a management SUB-PATH name is caught" \
+    "$([[ $LAST_RC -eq 1 ]] && grep -q 'FAIL the name is not management territory' <<<"$LAST_OUT" && echo 1 || echo 0)" \
+    "the deny list compared the WHOLE string, so \`hooks\` was refused and \`standup/portal\` sailed through"
+  rm -rf "$d"
+
   d="$(build_project)"; apply_add "$d" "MyApp" none; verify "$d/proj" myapp
   check "${pfx}a case-only id collision is caught" \
     "$(grep -q 'FAIL the roster has a squad with this id' <<<"$LAST_OUT" && echo 0 || echo 1)" \
@@ -486,10 +504,17 @@ self_test() {
     "unborn|elif not has_commit:|elif False:|a repo with an unborn HEAD is caught"
     "noorigin|if not has_origin(proj):|if False:|a repo with no origin is caught"
     "symlink|elif os.path.islink(proj):|elif False:|a symlinked project directory is caught"
-    "denylist|elif name.lower() in {o.lower() for o in owned}:|elif False:|a management-territory name is caught (derived, not transcribed)"
+    "denylist|elif head.lower() in {o.lower() for o in owned}:|elif False:|a management-territory name is caught (derived, not transcribed)"
+    # Anchored on the CALL SITE, not on management_head()'s body: the body is
+    # `.replace(\"\\\\\", \"/\")` and threading that through a `|`-delimited bash array is three
+    # layers of escaping deep, which is its own way for a mutation to silently no-op.
+    # `head = name` restores the old whole-string comparison exactly, so `hooks` stays caught and
+    # only the sub-path case reddens — which is what makes it an INDEPENDENT mutation.
+    "denylist-subpath|head = management_head(name)|head = name|a management SUB-PATH name is caught"
+    "legalname|if bad_name:|if False:|a name containing a path separator is caught"
     "mode120000|DANGEROUS_MODES = {\"160000\": \"gitlink (embedded repo)\", \"120000\": \"symlink blob\"}|DANGEROUS_MODES = {\"160000\": \"gitlink (embedded repo)\"}|a staged symlink blob (120000) is caught"
     "kindnone|if kind != \"none\" and not str(surface.get(\"inspect\") or \"\").strip():|if not str(surface.get(\"inspect\") or \"\").strip():|kind none with no inspect is ACCEPTED"
-    "denylist-exact|elif name.lower() in {o.lower() for o in owned}:|elif name in owned:|a management-territory name is caught case-insensitively"
+    "denylist-exact|elif head.lower() in {o.lower() for o in owned}:|elif head in owned:|a management-territory name is caught case-insensitively"
     "bareorigin|elif _git(root, \"check-ignore\", \"-q\", origin_dir)[0] != 0:|elif False:|an unignored local bare origin is caught"
     "gate-unreadable|if owned is None:|if False:|an unreadable supervisor_gate.py FAILS, it does not report ok"
     "secretname|if secrets:|if False:|a committed secret-shaped file is caught by NAME"
@@ -548,9 +573,12 @@ PY
 
   # EVERY job must have left a verdict. The serial version computed each verdict inline, so a
   # mutation could not go missing; this one iterates over the files that EXIST, which is intent
-  # rather than fact. Measured: kill one subshell before it writes and the run printed 17 verdicts,
-  # claimed 18, and exited 0 — on a 2-core CI runner with 18 concurrent git-heavy jobs, a job dying
-  # is both the likeliest failure and the least visible one.
+  # rather than fact. Measured: kill one subshell before it writes and the run printed one fewer
+  # verdict than it claimed, and exited 0 — on a 2-core CI runner running every mutation
+  # concurrently as a git-heavy job, a job dying is both the likeliest failure and the least
+  # visible one. (The counts are read from `muts` at run time and printed below; they are
+  # deliberately not restated here, because a number written into a comment rots the moment a
+  # mutation is added — this one already said "17 of 18" while the suite ran 25.)
   local collected; collected="$(ls "$jobdir" 2>/dev/null | wc -l | tr -d ' ')"
   if [[ "$collected" -ne "${#muts[@]}" ]]; then
     printf '\n!! SELF-TEST FAILED — %s of %s mutation job(s) reported back.\n' \
