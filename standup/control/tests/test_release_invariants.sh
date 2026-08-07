@@ -21,6 +21,15 @@
 #      real recipe is elsewhere and verified; the command self-corrects when called) was equally
 #      true of `/add-project adopt standup/portal`, and that one shipped.
 #
+#   C. "the released roster ships no project squad" was asserted by a UNIT TEST against the LIVE
+#      roster (`portal/tests/test_parsers.py`, `assert t["squads"] == []`). That made the factory
+#      test suite go RED for anyone who followed the README and ran `/add-team portal` + `/add-role`
+#      twice — the documented way to get a squad for the one product this repo ships. A release
+#      whose own docs redden its own suite is a release-content defect, and it is the same shape as
+#      A and B: nothing in the pipeline was looking at what the RELEASE says versus what it does.
+#      The fact is real and stays guarded; it just belongs here, judged against what the repo
+#      DISTRIBUTES rather than against whatever roster is on a user's disk.
+#
 #   B. `.claude/agents/portal_backend.md` and `portal_frontend.md` were tracked while the roster had
 #      no squad owning them. Running `/sync-roster` on the released tag PRUNES both — which is the
 #      proof that `/sync-roster` was never run before the release. "Remember to run /sync-roster
@@ -204,9 +213,65 @@ finally:
 PY
 }
 
+# --------------------------------------------------------------------------------------------
+# C. the RELEASED roster ships no project squad.
+#
+# Read from `git show HEAD:standup/team.json`, NOT from the working tree, and that is the whole
+# design of this case. `/add-team` and `/add-project` edit the working tree — that is a user
+# customising their install, not this repo changing what it distributes. A check that read the file
+# on disk would go red for every user who followed the README, which is precisely the defect being
+# fixed; relocating it into this judge unchanged would just move the red from one file to another.
+#
+# When there is no committed blob to read (a tarball/marketplace install with no .git) the case
+# reports N/A **out loud** and counts as neither pass nor fail. That is a real hole — this repo has
+# recorded what happens to checks that skip quietly — so it is mitigated rather than waved away: CI
+# runs this judge on a git checkout, so the branch that matters is exercised on every push and PR,
+# and --self-test drives the real branch too.
+# --------------------------------------------------------------------------------------------
+scan_shipped_roster() { # -> prints one line per project squad in the RELEASED roster
+  ROOT="$ROOT" python3 <<'PY'
+import json, os, subprocess
+
+root = os.environ["ROOT"]
+REL = "standup/team.json"
+try:
+    blob = subprocess.run(["git", "-C", root, "show", "HEAD:" + REL],
+                          capture_output=True, text=True)
+except OSError as exc:
+    print("!!NA git is not runnable here (%s), so the released roster cannot be read" % exc)
+    raise SystemExit(0)
+if blob.returncode != 0:
+    print("!!NA %s has no committed %s (not a git checkout?) — this case judges what the repo "
+          "DISTRIBUTES, and only a checkout can answer that" % (root, REL))
+    raise SystemExit(0)
+
+try:
+    data = json.loads(blob.stdout)
+except json.JSONDecodeError as exc:
+    print("the committed %s is not valid JSON (%s) — the release ships a roster nothing can "
+          "load" % (REL, exc))
+    raise SystemExit(0)
+
+for t in (data.get("teams") or []):
+    devs = [d.get("id") for d in (t.get("developers") or [])]
+    print("%s — the COMMITTED roster declares this project squad. The release ships `teams: []` on "
+          "purpose: a fresh install has nothing to work on until /add-project creates it, and "
+          "/standup stops with that instruction rather than polling an empty board. A squad "
+          "committed here ships pointed at a repo the user does not have (devs: %s)."
+          % (t.get("id"), ", ".join(str(d) for d in devs) or "none"))
+PY
+}
+
 judge() { # <case name> <findings>   — empty findings = pass; otherwise print each on its own line
   local name="$1" out="$2"
   grep -q '^!!JUDGE' <<<"$out" && die_judge "$(grep '^!!JUDGE' <<<"$out")"
+  # N/A is printed, never counted. It is not a PASS: a case that could not be answered must not
+  # look like one that was.
+  if grep -q '^!!NA' <<<"$out"; then
+    printf '  %s → N/A  (not judged)\n' "$name"
+    sed 's/^!!NA /      /' <<<"$out"
+    return 0
+  fi
   check "$name" "$([[ -z "$out" ]] && echo 1 || echo 0)"
   [[ -z "$out" ]] || sed 's/^/      /' <<<"$out"
 }
@@ -217,6 +282,9 @@ run_cases() {
 
   section "B. the tracked teammate definitions match what /sync-roster generates"
   judge "no generated .claude/agents file is orphaned, missing, or stale" "$(scan_agents)"
+
+  section "C. the RELEASED roster (the committed blob, not your working tree) ships no project squad"
+  judge "the roster this repo distributes declares no project squad" "$(scan_shipped_roster)"
 }
 
 # Stage the DATA the judge reads into a throwaway root, so a mutation never touches the real tree.
@@ -232,6 +300,13 @@ stage_root() { # -> echoes the staged root
   cp -R "$REPO/skills" "$d/skills"
   [[ -d "$REPO/.claude/commands" ]] && cp -R "$REPO/.claude/commands" "$d/.claude/commands"
   cp -R "$REPO/.claude/agents" "$d/.claude/agents"
+  # Case C reads the COMMITTED blob, so the staged root has to be a real checkout or the case can
+  # only ever report N/A and its mutation would prove nothing. Committing here also keeps the A/B
+  # mutations honest: they edit the working tree AFTER this returns, so they redden their own file-
+  # reading cases while leaving C's committed blob pristine.
+  git -C "$d" init -q -b main 2>/dev/null || git -C "$d" init -q
+  git -C "$d" add -A
+  git -C "$d" -c user.name=judge -c user.email=judge@invalid commit -q -m "staged release copy"
   echo "$d"
 }
 
@@ -311,10 +386,56 @@ self_test() {
   fi
   rm -rf "$d"
 
-  # "each drove its own case red" would be a lie now: one of these deliberately plants a CORRECT
-  # invocation and requires the case to stay green. A lint only has teeth if it fires on the bad
-  # input AND holds its tongue on the good one; a mutation set proves only the first half.
-  [[ $rc -eq 0 ]] && printf '\n--self-test → PASS  (each planted defect reddened its OWN case; the well-formed control stayed green)\n'
+  # C: COMMIT a project squad into the staged roster — the shape a release must not distribute.
+  d="$(stage_root)"
+  python3 - "$d/standup/team.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+data = json.load(open(p, encoding="utf-8"))
+data["teams"] = [{"id": "leaked_squad", "name": "Leaked Squad",
+                  "developers": [{"id": "leaked_dev", "folder": "not-your-repo"}]}]
+json.dump(data, open(p, "w", encoding="utf-8"), indent=2)
+PY
+  git -C "$d" -c user.name=judge -c user.email=judge@invalid commit -qam "leak a squad into the release"
+  out="$(STANDUP_RELEASE_ROOT="$d" bash "$0" 2>&1)"
+  if grep -q "distributes declares no project squad → FAIL" <<<"$out"; then
+    printf '  %-46s → correctly went RED\n' "roster-ships-a-squad"
+  else
+    printf '  %-46s → ERROR  its own case stayed green\n' "roster-ships-a-squad" >&2; rc=3
+  fi
+  rm -rf "$d"
+
+  # C's control, and the reason this case exists at all: a user running the README's `/add-team` +
+  # `/add-role` edits the WORKING TREE. That is customising an install, not changing what the repo
+  # distributes, and it must NOT redden anything. The old home for this fact — a unit test on the
+  # live roster — failed exactly here, so a mutation that only proves "it can go red" would be
+  # proving the wrong half.
+  d="$(stage_root)"
+  python3 - "$d/standup/team.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+data = json.load(open(p, encoding="utf-8"))
+data["teams"] = [{"id": "portal", "name": "portal squad",
+                  "review_surface": {"kind": "web", "label": "Mission Control",
+                                     "inspect": "bash standup/control/inspect_portal.sh"},
+                  "developers": [{"id": "portal_backend", "folder": "standup/portal"},
+                                 {"id": "portal_frontend", "folder": "standup/portal"}]}]
+json.dump(data, open(p, "w", encoding="utf-8"), indent=2)
+PY
+  out="$(STANDUP_RELEASE_ROOT="$d" bash "$0" 2>&1)"
+  if grep -q "distributes declares no project squad → PASS" <<<"$out"; then
+    printf '  %-46s → correctly stayed GREEN\n' "roster-user-added-a-squad-uncommitted"
+  else
+    printf '  %-46s → ERROR  a user following the README was flagged\n' "roster-user-added-a-squad-uncommitted" >&2
+    grep -A3 "distributes declares no project squad" <<<"$out" >&2
+    rc=3
+  fi
+  rm -rf "$d"
+
+  # "each drove its own case red" would be a lie now: two of these deliberately plant a CORRECT
+  # input and require the case to stay green. A lint only has teeth if it fires on the bad input
+  # AND holds its tongue on the good one; a mutation set proves only the first half.
+  [[ $rc -eq 0 ]] && printf '\n--self-test → PASS  (each planted defect reddened its OWN case; both well-formed controls stayed green)\n'
   return $rc
 }
 
