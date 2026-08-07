@@ -75,10 +75,13 @@ worktree → review the diff → **Approve** → commit. (Details: `standup/port
 
 ## The team (roster: `standup/team.json`)
 
-- **Demo Dev Squad** — `dev_a` (builder) + `dev_b` (reviewer), a pair who challenge each
-  other in fresh context. Works on whatever project you add with `/add-project`.
-- **Team Portal Squad** *(the exception)* — `portal_backend` + `portal_frontend`. Owns the
-  Mission Control portal itself.
+- **No squads ship.** `teams` is `[]`, so `/standup` stops until `/add-project` creates one —
+  a pair of developers who challenge each other in fresh context, pointed at the repo you
+  cloned, created, or adopted.
+- **Including the portal.** No shipped squad owns `standup/portal/`. The supervisor gate still
+  treats it as project territory and blocks hand-editing it, so changing Mission Control means
+  adding a squad for it first — the "route it through the team" rule above still holds; there is
+  simply no team for that path until you make one.
 - **Staff** — `pm_agent` (Steve-Jobs-grounded scope/say-no + board) · `design_lead`
   (Apple-HIG lens on the portal UI) · `product_qa` (the one role that USES the product as a user
   every tick and reports where it breaks). `comms_triage` is present but inactive. `pm_agent`,

@@ -71,11 +71,14 @@ Which file owns which beat, and what each gate stops: [`ARCHITECTURE.md`](ARCHIT
 
 ## The team
 
-The squads:
+The squads: **none ship**. `standup/team.json` has `teams: []`, so the first `/standup` stops and
+tells you to run `/add-project`. That command creates the squad — a pair of developers pointed at
+the repo you clone, create, or adopt.
 
-| squad | the pair | works on |
-|---|---|---|
-| Team Portal Squad | `portal_backend` and `portal_frontend` | `standup/portal/` — Mission Control itself |
+This includes the portal: **no squad ships that owns `standup/portal/`**, so Mission Control is not
+maintained by the bundled roster. The supervisor gate still classifies `standup/portal/` as project
+territory and blocks hand-editing it, so changing the portal means adding a squad for it first
+(`/add-project adopt standup/portal`, or an entry in `standup/team.json`).
 
 The staff:
 
@@ -331,10 +334,11 @@ bash standup/control/tests/test_remove_project.sh                       # /remov
 ```
 
 **Six of those take `--self-test`** — `verify_design_quality.js`, `test_sdlc_routing.js`,
-`test_setup_guard.sh`, `test_eval_resolver.sh`, `test_arm_path.sh`, `test_add_project.sh`, `test_remove_project.sh` — which deliberately
-breaks the thing being judged and requires the judge to go red. Run it before trusting a green. The
-other three do not: the two pytest suites, and `check_workflow_parse.js`, which takes a **filename**
-and would read `--self-test` as one, reporting a missing file as if the engine were broken.
+`test_eval_resolver.sh`, `test_arm_path.sh`, `test_add_project.sh`, `test_remove_project.sh` — which
+deliberately breaks the thing being judged and requires the judge to go red. Run it before trusting
+a green. The other two do not: the portal pytest suite, and `check_workflow_parse.js`, which takes a
+**filename** and would read `--self-test` as one, reporting a missing file as if the engine were
+broken.
 
 Pass and failure counts are deliberately not printed here. A number copied into prose rots
 exactly the way a version number does; run the commands and read what they print.

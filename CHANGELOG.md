@@ -8,6 +8,23 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 **The bundled sample is gone. A fresh install has no project until you add one, and `/standup`
 says so instead of polling an empty board.**
 
+### Breaking — what you lose upgrading from 0.4.x
+
+- **`demo-app/` is gone**, with its git repo and its local bare origin. Nothing replaces it: you
+  add your own project with `/add-project`.
+- **`test_setup_guard.sh` and `test_precondition_parity.sh` are deleted.** If your CI names them,
+  that step will **exit 127**. Remove those two lines; the rest of the judge list is unchanged.
+- **`evals/cases.json` ships empty** (`cases: []` plus an `_example_case` the resolver ignores).
+  `/eval` reports `0 runnable, 0 skipped` until you add a case for your own project.
+- **`demo_squad` AND the `portal` squad are both gone** — `teams` is `[]`. `dev_a`, `dev_b`,
+  `portal_backend` and `portal_frontend` no longer resolve as assignees, so `/work --assignee` and
+  any code task naming them stops with the roster guard. `/sync-roster` prunes their generated
+  agent defs.
+- **Consequence worth stating plainly:** with no squad owning `standup/portal/`, Mission Control is
+  no longer maintained by the shipped roster, while the supervisor gate still blocks hand-editing
+  it. Changing the portal now requires adding a squad for it first. That is the cost of shipping
+  zero squads, and it was not spelled out when the decision was taken.
+
 ### The problem this solves
 
 `demo-app/` was a sample that behaved like a default. Every entry point named it, the installer
