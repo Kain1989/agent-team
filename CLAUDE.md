@@ -86,8 +86,12 @@ worktree → review the diff → **Approve** → commit. (Details: `standup/port
   are all wrong for something this repo ships — it also refuses the name, since `name` is the
   directory, the squad id and the dev-id prefix at once and `standup/portal` has a `/` in it. Use
   `/add-team portal — own the local Mission Control portal --kind web --inspect "bash
-  standup/control/inspect_portal.sh"`, then `/add-role portal portal_backend "<role>" standup/portal`
-  twice (the fourth argument is the `folder`, which may contain `/`), then `/sync-roster`. Do not
+  standup/control/inspect_portal.sh"`, then both of
+  `/add-role portal portal_backend "Portal Dev — Backend & Jobs" standup/portal` and
+  `/add-role portal portal_frontend "Portal Dev — Frontend" standup/portal` (the fourth argument is
+  the `folder`, which may contain `/`), then `/sync-roster`. "Run it twice" was the wrong
+  instruction: run literally, the second call is a duplicate-id refusal — the two developers need
+  two different ids, which is the whole point of a pair. Do not
   verify that shape with `standup/control/verify_project.py` — it checks `/add-project`'s invariants,
   which assume directory == squad id == every developer's `folder`, and reports failures here that
   are not ones. Full walkthrough: [`README.md`](README.md#the-team).

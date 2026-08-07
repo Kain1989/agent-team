@@ -11,6 +11,58 @@ judge in the suite was green while both were true, because nothing judged either
 Zero squads was a deliberate decision and it stands. What did not survive review is the paragraph
 0.5.0 wrote about the *consequence* of that decision.
 
+### Breaking — `/add-team`'s old call form, for scripted callers only
+
+`/add-team <id> — <mission>` is no longer a complete invocation. It now requires `--kind`, and
+`--inspect` for every kind but `none`:
+
+```
+/add-team <id> — <mission> --kind <web|report|agent|api|cli|none> [--inspect "<CMD>"]
+```
+
+**Who this breaks, precisely** — the boundary matters more than the rule:
+
+- **Non-interactive callers** (`claude -p`, a scheduled run, a workflow agent) using the old form
+  are **REFUSED**. The command says which flag is missing, prints the invocation to re-run, and
+  changes nothing. A refusal, not a hang: measured with a real `claude -p` — 31s, no prompt, and
+  `standup/team.json`'s checksum identical before and after. This is deliberately the opposite of
+  what the same shape did in `/add-project` before 0.4.x, where a question asked into a headless
+  run became a timeout with nothing to show for it.
+- **Interactive callers are unaffected.** The old form is not rejected there; you are asked for the
+  missing flag and the command proceeds. Nothing you type by hand stops working.
+
+**Why the version is still 0.5.1 and not 0.6.0.** Under 0.y.z the minor is not a compatibility
+boundary. It is called out here rather than folded into "Fixed" because 0.5.0 gave a change of this
+size its own `### Breaking` section, and a project that follows its own precedent only when the
+change is large is a project whose changelog cannot be trusted for the small ones.
+
+**Why it had to break.** The old template wrote no `review_surface`, and the engine **stops a run**
+on a squad that declares none — so the command's output was a squad that could not be used. Keeping
+the lenient form as a fallback would have meant a command that silently produces broken state, which
+is the failure this release is otherwise entirely about.
+
+### Fixed — the second dead command in the same README
+
+`README.md`'s roster table still carried the pre-0.5.1 signature `/add-team <id> — <mission>` —
+without the flags — three rows above an `/add-project` entry that *does* carry its own. So the fix
+above shipped alongside a table teaching the form it had just retired.
+
+The root cause is the more important half: **the new release judge could not see it by
+construction.** Its scanner matched `/add-project` only, so the entire `/add-team` surface was
+outside its reach — the same half-covered shape this project has been caught by before, where the
+half that was missed is the half that shipped. Every argument for letting the row through (it is a
+signature, not a recipe; the working recipe is elsewhere and verified; the command self-corrects
+when actually called) was equally true of `/add-project adopt standup/portal`, and that one shipped.
+
+So the judge was widened first and the README edited second. `test_release_invariants.sh` now scans
+`/add-(project|team)`, requires `--kind` on every documented `/add-team` invocation, and judges only
+occurrences written **as commands** — inside a fenced block or opening an inline code span — because
+reading the trailing words of a prose mention as arguments is how a lint starts crying wolf and gets
+switched off. It carries its own mutation, planted in a *different* document from the `/add-project`
+one so neither can pass on the other's behalf, **plus a control case**: a well-formed `/add-team`
+must stay green. A mutation set proves a lint fires on bad input; only the control proves it holds
+its tongue on good input.
+
 ### Fixed — the documented way to own the portal did not work
 
 `README.md` told readers to run `/add-project adopt standup/portal`. Measured on a fixture:
@@ -60,7 +112,8 @@ Neither of the refusals `/add-project`'s prose promised was implemented anywhere
   refused and a squad pointed at the engine's own control plane was not.
 
 Both carry their own mutation in `test_add_project.sh --self-test` (now 27 branches, each driving
-its own named case red). Reverting either makes exactly one case go green — verified.
+its own named case red). Neutralising either guard turns exactly one case **red** — measured, one
+FAIL each, not a suite-wide collapse; that independence is the point of a mutation set.
 
 - **`agents_gen.generate()` refuses an unusable role id instead of crashing on it**, validating every
   id *before* writing any file, so a half-synced `.claude/agents/` cannot be left for `/team` to

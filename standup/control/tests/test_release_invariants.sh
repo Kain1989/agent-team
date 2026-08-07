@@ -12,6 +12,15 @@
 #      docs gave for the one product the plugin ships was a command that cannot run. A documented
 #      command nobody executes in CI is prose, and prose does not fail.
 #
+#      The first version of this judge matched only `/add-project`, and a SECOND dead command
+#      survived it in the same README: `/add-team <id> — <mission>`, a pre-0.5.1 signature carrying
+#      no `--kind`, three tables below a `/add-project` row that does carry its flags. It was not
+#      missed by the judge, it was invisible to it BY CONSTRUCTION — which is this project's
+#      recurring shape, and the reason the fix was to widen the judge first and edit the README
+#      second. Every argument for letting that row through (it is a signature, not a recipe; the
+#      real recipe is elsewhere and verified; the command self-corrects when called) was equally
+#      true of `/add-project adopt standup/portal`, and that one shipped.
+#
 #   B. `.claude/agents/portal_backend.md` and `portal_frontend.md` were tracked while the roster had
 #      no squad owning them. Running `/sync-roster` on the released tag PRUNES both — which is the
 #      proof that `/sync-roster` was never run before the release. "Remember to run /sync-roster
@@ -52,7 +61,8 @@ die_judge() { printf '\n!! JUDGE BROKEN — %s\n' "$1" >&2; exit 3; }
 [[ -f "$PORTAL/parsers/agents_gen.py" ]] || die_judge "agents_gen.py not found under $PORTAL"
 
 # --------------------------------------------------------------------------------------------
-# A. no instructional document prints an /add-project invocation that /add-project refuses.
+# A. no instructional document prints an /add-project or /add-team invocation that the command
+#    itself refuses, or that produces something the engine then refuses to run.
 #
 # The name rules are IMPORTED from verify_project.py, never restated here. That file is the
 # executable form of Step 1a, so there is exactly one implementation and this judge cannot drift
@@ -86,18 +96,51 @@ if os.path.isdir(cmds):
 # switched off. `-` leads a flag; `#` starts a trailing comment.
 PLACEHOLDER = set("<>[]{}|…\"'`")
 MODES = ("clone", "new", "adopt")
-INVOKE = re.compile(r"/(?:agent-team:)?add-project\s+([^\n`]*)")
+# BOTH squad-creating commands. The first version of this judge matched only /add-project — and
+# the SECOND dead command in the same README (`/add-team <id> — <mission>`, a pre-0.5.1 signature
+# with no --kind) was therefore invisible BY CONSTRUCTION. Half-covered is the shape this repo has
+# already been caught by: the half that was missed is the half that shipped.
+INVOKE = re.compile(r"/(?:agent-team:)?add-(project|team)\s+([^\n`]*)")
 
 bad = []
 for rel in DOCS:
     path = os.path.join(root, rel)
     if not os.path.isfile(path):
         continue
+    in_fence = False
     for lineno, line in enumerate(open(path, encoding="utf-8"), 1):
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            continue
         for m in INVOKE.finditer(line):
-            toks = m.group(1).split()
+            # Judge only occurrences written AS A COMMAND — inside a fenced block, or opening an
+            # inline code span. A bare prose mention ("run /add-team then /add-role") is not an
+            # invocation, and reading its trailing words as arguments is how a lint starts crying
+            # wolf. A checker that cries wolf is worse than no checker; this project threw one
+            # away for exactly that once already.
+            if not (in_fence or (m.start() > 0 and line[m.start() - 1] == "`")):
+                continue
+            cmd, toks = m.group(1), m.group(2).split()
             if not toks:
                 continue
+
+            if cmd == "team":
+                # `--kind` is not optional and not decoration: the engine STOPS a run on a squad
+                # that declares no review_surface, so a signature printed without it teaches a
+                # call that produces a squad which cannot run.
+                if not any(t.startswith("--kind") for t in toks):
+                    bad.append("%s:%d: /add-team %s — no --kind. The engine refuses to run a squad "
+                               "that declares no review_surface, so this signature documents a call "
+                               "that cannot produce a runnable squad."
+                               % (rel, lineno, " ".join(toks[:3])))
+                sid = toks[0]
+                if not (sid[0] in "-#" or (set(sid) & PLACEHOLDER)):
+                    why = vp.illegal_project_name(sid)
+                    if why:
+                        bad.append("%s:%d: %s — %s (a squad id becomes an agent-type name and a "
+                                   "filename under .claude/agents/)" % (rel, lineno, sid, why))
+                continue
+
             if toks[0] in MODES:
                 mode, rest = toks[0], toks[1:]
             else:
@@ -169,8 +212,8 @@ judge() { # <case name> <findings>   — empty findings = pass; otherwise print 
 }
 
 run_cases() {
-  section "A. no instructional document prints an /add-project the command refuses"
-  judge "every literal /add-project name in the docs passes /add-project's own rules" "$(scan_docs)"
+  section "A. no instructional document prints an /add-project or /add-team the command refuses"
+  judge "every documented /add-project and /add-team invocation is one that runs" "$(scan_docs)"
 
   section "B. the tracked teammate definitions match what /sync-roster generates"
   judge "no generated .claude/agents file is orphaned, missing, or stale" "$(scan_agents)"
@@ -208,10 +251,40 @@ self_test() {
   d="$(stage_root)"
   printf '\nSee (`/add-project adopt standup/portal`) for the portal.\n' >> "$d/README.md"
   out="$(STANDUP_RELEASE_ROOT="$d" bash "$0" 2>&1)"
-  if grep -q "passes /add-project's own rules → FAIL" <<<"$out"; then
-    printf '  %-46s → correctly went RED\n' "docs-dead-command"
+  if grep -q "invocation is one that runs → FAIL" <<<"$out"; then
+    printf '  %-46s → correctly went RED\n' "docs-dead-add-project"
   else
-    printf '  %-46s → ERROR  its own case stayed green\n' "docs-dead-command" >&2; rc=3
+    printf '  %-46s → ERROR  its own case stayed green\n' "docs-dead-add-project" >&2; rc=3
+  fi
+  rm -rf "$d"
+
+  # A, the /add-team half — its OWN mutation, because the /add-project one above went red for
+  # weeks while this branch did not exist at all. Planted in a DIFFERENT document from the
+  # /add-project mutation so neither can be passing on the other's behalf.
+  d="$(stage_root)"
+  printf '\n| `/add-team demo — do a thing` | add a squad |\n' >> "$d/CLAUDE.md"
+  out="$(STANDUP_RELEASE_ROOT="$d" bash "$0" 2>&1)"
+  if grep -q "invocation is one that runs → FAIL" <<<"$out" \
+     && grep -q "CLAUDE.md.*no --kind" <<<"$out"; then
+    printf '  %-46s → correctly went RED\n' "docs-add-team-no-kind"
+  else
+    printf '  %-46s → ERROR  its own case stayed green\n' "docs-add-team-no-kind" >&2
+    printf '     a documented /add-team without --kind builds a squad the engine refuses to run\n' >&2
+    rc=3
+  fi
+  rm -rf "$d"
+
+  # ...and the counter-case: a CORRECT /add-team must NOT be flagged, or the lint is just noise
+  # and gets switched off. This is the half a "does it go red" mutation cannot prove.
+  d="$(stage_root)"
+  printf '\n| `/add-team demo — do a thing --kind cli --inspect "pytest -q"` | add a squad |\n' >> "$d/CLAUDE.md"
+  out="$(STANDUP_RELEASE_ROOT="$d" bash "$0" 2>&1)"
+  if grep -q "invocation is one that runs → PASS" <<<"$out"; then
+    printf '  %-46s → correctly stayed GREEN\n' "docs-add-team-well-formed"
+  else
+    printf '  %-46s → ERROR  a well-formed /add-team was flagged\n' "docs-add-team-well-formed" >&2
+    grep -A3 "invocation is one that runs" <<<"$out" >&2
+    rc=3
   fi
   rm -rf "$d"
 
@@ -238,7 +311,10 @@ self_test() {
   fi
   rm -rf "$d"
 
-  [[ $rc -eq 0 ]] && printf '\n--self-test → PASS  (each broken invariant drove its OWN case red)\n'
+  # "each drove its own case red" would be a lie now: one of these deliberately plants a CORRECT
+  # invocation and requires the case to stay green. A lint only has teeth if it fires on the bad
+  # input AND holds its tongue on the good one; a mutation set proves only the first half.
+  [[ $rc -eq 0 ]] && printf '\n--self-test → PASS  (each planted defect reddened its OWN case; the well-formed control stayed green)\n'
   return $rc
 }
 

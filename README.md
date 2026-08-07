@@ -161,7 +161,7 @@ Shape the roster:
 | command | what it does |
 |---|---|
 | `/team-structure` | show the org — squads, pairs, staff, supervisor |
-| `/add-team <id> — <mission>` | add a squad |
+| `/add-team <id> — <mission> --kind K [--inspect CMD]` | add a squad (`--kind`/`--inspect` declare its product surface; the engine refuses a squad without one) |
 | `/add-role <squad> <id> <role> [folder]` | add a developer, or a staff role with `--staff` |
 | `/sync-roster` | regenerate the native teammate definitions in `.claude/agents/` from the roster |
 
