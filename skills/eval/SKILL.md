@@ -23,7 +23,7 @@ For EACH case the plan marked `run`, in order:
    > In `standup/standup.workflow.js` the reviewer prompts interpolate the roster's folder —
    > `const folder = t.folder || dev.folder || team.folder || '.'` — into `git -C ${folder} diff -- .`
    > (and `git -C ${folder} show HEAD -- .` for the supervisor's final read). `git -C` resolves
-   > relative to the process cwd, so a run whose `folder` is `demo-app` reviews the **real**
+   > relative to the process cwd, so a run reviews the **real**
    > directory while the work happened in your copy — an empty diff, reported as `review-failed`.
    > Pointing `folder` at the copy does not work either: the engine hard-stops on a folder the
    > assignee does not declare (grep the engine for `!owned.includes(t.folder)`), and

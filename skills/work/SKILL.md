@@ -7,7 +7,7 @@ allowedTools: Read, Bash, Edit, Write, Workflow, Task
 Run ONE task end-to-end through the gated SDLC. Do it now; don't just describe it.
 
 TASK: $ARGUMENTS
-(If empty, pick the top unchecked item from `demo-app/BACKLOG.md`.)
+(If empty, ask which project and task — there is no default project until you add one.)
 
 This command does **not** carry its own copy of the pipeline. It dispatches to the same engine
 `/standup` uses, with a single-task argument, so the plugin holds exactly one SDLC definition and
@@ -17,7 +17,7 @@ there is no second recipe to drift. The canonical step list lives in `standup/te
 1. **The target must be a git repo with a commit.** `/add-project` guarantees that for every
    project it creates; if you are pointing at something it did not create, check first.
 2. **Read `standup/team.json`** and pick the `assignee` — a developer id from the squad that owns the
-   work (e.g. `dev_a` for `demo-app`, `portal_backend` for the portal). Pass the roster **verbatim**;
+   work (e.g. `portal_backend` for the portal, or a developer `/add-project` created). Pass the roster **verbatim**;
    a trimmed roster silently degrades the run.
 3. **Run the task through the engine:**
    ```

@@ -3,6 +3,72 @@
 All notable changes to the **agent-team** plugin. Format: [Keep a Changelog](https://keepachangelog.com/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] — 2026-08-06
+
+**The bundled sample is gone. A fresh install has no project until you add one, and `/standup`
+says so instead of polling an empty board.**
+
+### The problem this solves
+
+`demo-app/` was a sample that behaved like a default. Every entry point named it, the installer
+initialised it, the eval gold-set imported from it, and the governance hook classified paths by it —
+so "the team works on the sample" was the shipped default and "point it at your own code" was the
+deviation. With `/add-project` (0.4.1) taking three kinds of source, the sample stopped earning its
+place: it is a second thing to learn before the first useful thing.
+
+The deletion is **37 files**, not the 5 an early scan suggested. The gap is the predicate: scanning
+for *paths* finds a handful, and deleting only the directory leaves the portal suite at **185
+passed** — a false green. The dependency that matters is **roster resolution**, and deleting the
+directory *and* the squad turns that into **5 failed** immediately, with more behind it.
+
+### What changed
+
+- **`teams: []` ships.** The engine's empty-roster stop (0.4.0) does the rest: 0 agents dispatched,
+  and the message names `/add-project`.
+- **`/remove-project demo-app` performed the roster half** — its first real use. It reported the
+  `evals` target, the `product_qa.scope_folders` entry and the absence of cross-squad pairs before
+  touching anything, and its checker then **failed** `the user's code was left alone`, correctly:
+  the directory was deleted by hand in this batch, which is a separate deliberate act and not
+  something that command may ever do.
+- **`/eval` keeps the mechanism, loses the gold-set.** `cases: []` with an `_example_case` key the
+  resolver ignores, so "what a case looks like" survives as documentation. `resolve_cases.py` now
+  prints `0 case(s): 0 runnable, 0 skipped` plus how to add one.
+- **Two judges were retired, deliberately**, because their subjects no longer exist:
+  `test_setup_guard.sh` (guarded `setup.sh`'s sample section) and `test_precondition_parity.sh`
+  (guarded the five documents that stated the sample's git-init precondition). Both said in their
+  own die-messages that a judge finding zero sites must be deleted rather than left reporting
+  success; that is what happened.
+- **The governance hook keeps its logic and loses the name.** `supervisor_gate.py` classified
+  `demo-app/` in prose; the executable rule was always "anything not on the allow-list is a
+  project", so only the comments and the user-facing message changed.
+- **`.demo-app-origin.git/` is gone and its mechanism generalised** — 0.4.1's local bare origin for
+  `new`/origin-less `adopt`, plus the `.*-origin.git/` pattern in the shipped `.gitignore`.
+
+### Tests stop reading the shipped roster
+
+An empty shipped roster broke nine portal tests and the routing judge, and that is the right
+outcome to fix rather than to work around: a unit test that asserts on shipped *content* is testing
+the wrong thing. `test_sdlc_routing.js` now carries its own fixture roster (the shipped `manager`
+policy is still read for the one case that is about the shipped file), and the portal suite has a
+`populated_root` fixture for the tests that need a squad. `test_jobs.py` stopped copying the shipped
+roster into its temp root and writes the one it actually needs.
+
+### Carried from 0.4.1
+
+- **`em_owned_names` now fails when it cannot read the gate.** Its docstring already said the caller
+  reports NOT CHECKED and FAILS; the caller called `_ok`, so a line reading "not a pass" *was* a
+  pass — and `skills/init` scaffolds without `hooks/`, which is exactly the shape where the deny
+  list is inert. The sibling `check_removed` had taken the opposite line since it was written.
+- **The bare-origin check no longer false-FAILs on a non-git install root** (`check-ignore` exits
+  128 outside a repo, which is "no index to absorb it", not "unignored").
+- **The secret-name refusal has executable code and a covering case** — `committed_secret_files()`
+  reads the project's HEAD tree, because the content scanner demonstrably misses unquoted dotenv
+  lines.
+
+Three numbers were removed rather than corrected: a self-test duration, a staged-path count and a
+mutation tally, all of which had rotted and two of which were fixture-dependent. `README.md` says a
+number copied into prose rots like a version number; these were three of them.
+
 ## [0.4.1] — 2026-08-06
 
 **`/add-project` takes three kinds of source, and all three end in a project the team can actually
@@ -92,8 +158,7 @@ commits first proves nothing about the project.
 ### The local bare origin has to be ignored too
 
 Creating `<root>/.<name>-origin.git` and ignoring only `/<name>/` leaves the bare origin as ordinary
-files — neither covered by that pattern nor a pointer entry. Measured on an installed shape: **23
-staged paths** under it, and a loose object that decompressed to `DB_PASSWORD=hunter2`. That is
+files — neither covered by that pattern nor a pointer entry. Measured on an installed shape: every object under it staged, including a loose one that decompressed to `DB_PASSWORD=hunter2`. That is
 worse than the gitlink this command was built to prevent: a gitlink is a dangling pointer, this is
 the content, and it travels when the user pushes their own agent-team repo. The shipped `.gitignore`
 now carries a **pattern** (`.*-origin.git/`) rather than a hardcoded sample line, `/add-project`
@@ -116,10 +181,10 @@ it. Running `check_output` on the staged diff was considered and rejected — it
 
 `test_add_project.sh` grows to **22 checker branches**, each with an independent covering case and
 its own `if False:` mutation — written in the same edit as the branch, not added after review.
-Its `--self-test` runs the mutations **concurrently** (~24s instead of ~2 minutes) with two gates
+Its `--self-test` runs the mutations **concurrently** rather than serially, with two gates
 that the serial version got for free and the parallel one did not: it **asserts every job reported
-back** (a subshell that dies before writing its verdict used to be invisible — measured: 17 verdicts
-printed, 18 claimed, exit 0), and it **requires the unmutated suite to be green first**, because
+back** (a subshell that dies before writing its verdict used to be invisible — measured: one fewer verdict
+printed than claimed, exit 0), and it **requires the unmutated suite to be green first**, because
 "did this case go red" is meaningless for a case that was already red.
 
 Group D demonstrates rather than asserts: it drives git into the non-repo shape and shows the

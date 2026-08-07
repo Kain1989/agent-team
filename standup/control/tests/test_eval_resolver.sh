@@ -4,7 +4,7 @@
 #     bash standup/control/tests/test_eval_resolver.sh
 #     bash standup/control/tests/test_eval_resolver.sh --self-test
 #
-# WHAT IT GUARDS. `/eval` scores the team against a gold-set bound to `demo-app` — an OPTIONAL
+# WHAT IT GUARDS. `/eval` scores the team against a gold-set bound to a project directory — one
 # sample the docs invite you to delete. Once deleted, every case had a target that was not there,
 # and the suite produced NOTHING: no cases, no zero, no explanation. A regression suite that goes
 # quiet when its target vanishes is indistinguishable from one that has not been run, which is the
@@ -56,20 +56,20 @@ run_resolver() { # <resolver-path> <fixture-dir> <cases-json-text> [dirs-to-crea
 # `elif False:` on that branch alone, all checks PASS, exit 0, while the resolver flipped a real
 # case from SKIP to run). `requires` is a field this batch introduced and the gold-set's own
 # `_targets` note invites users to write; shipping it with no covering case is shipping a promise.
-CASES_BOTH='{"target":"demo-app","cases":[
-  {"id":"a","requires":"demo-app","prompt":"p","check":"true"},
+CASES_BOTH='{"target":"sample-app","cases":[
+  {"id":"a","requires":"sample-app","prompt":"p","check":"true"},
   {"id":"b","target":"my-repo","requires":"my-repo","prompt":"p","check":"true"},
   {"id":"c","target":"my-repo","requires":"golden-fixtures","prompt":"p","check":"true"}]}'
 CASES_NO_TARGET='{"cases":[{"id":"a","prompt":"p","check":"true"}]}'
-CASES_MISSING_FIELD='{"target":"demo-app","cases":[{"id":"a","prompt":"p"}]}'
-CASES_MALFORMED='{"target":"demo-app","cases":[  '
+CASES_MISSING_FIELD='{"target":"sample-app","cases":[{"id":"a","prompt":"p"}]}'
+CASES_MALFORMED='{"target":"sample-app","cases":[  '
 
 run_cases() { # <resolver-path> <label-prefix>
   local R="$1" pfx="${2:-}"
   local dir
 
   section "${pfx}A. targets present — cases run, EXCEPT the one whose \`requires\` is absent"
-  dir="$(mktemp -d)"; run_resolver "$R" "$dir" "$CASES_BOTH" demo-app my-repo
+  dir="$(mktemp -d)"; run_resolver "$R" "$dir" "$CASES_BOTH" sample-app my-repo
   check "${pfx}exit 0" "$([[ $LAST_RC -eq 0 ]] && echo 1 || echo 0)" "exit=$LAST_RC"
   check "${pfx}2 runnable, 1 skipped" \
     "$(grep -q '2 runnable, 1 skipped' <<<"$LAST_OUT" && echo 1 || echo 0)" \
@@ -91,7 +91,7 @@ run_cases() { # <resolver-path> <label-prefix>
   check "${pfx}the skip is marked SKIP, never counted as a pass" \
     "$(grep -qE '^ +SKIP +a ' <<<"$LAST_OUT" && echo 1 || echo 0)"
   check "${pfx}the skip NAMES the missing directory" \
-    "$(grep -E '^ +SKIP +a ' <<<"$LAST_OUT" | grep -q "demo-app" && echo 1 || echo 0)"
+    "$(grep -E '^ +SKIP +a ' <<<"$LAST_OUT" | grep -q "sample-app" && echo 1 || echo 0)"
   check "${pfx}the surviving case is unaffected" \
     "$(grep -qE '^ +run +b ' <<<"$LAST_OUT" && echo 1 || echo 0)"
   rm -rf "$dir"
@@ -116,10 +116,10 @@ run_cases() { # <resolver-path> <label-prefix>
   rm -rf "$dir"
 
   section "${pfx}E. a broken gold-set is LOUD (exit 1), never an empty plan"
-  dir="$(mktemp -d)"; run_resolver "$R" "$dir" "$CASES_MALFORMED" demo-app
+  dir="$(mktemp -d)"; run_resolver "$R" "$dir" "$CASES_MALFORMED" sample-app
   check "${pfx}malformed JSON exits 1" "$([[ $LAST_RC -eq 1 ]] && echo 1 || echo 0)" "exit=$LAST_RC"
   rm -rf "$dir"
-  dir="$(mktemp -d)"; run_resolver "$R" "$dir" "$CASES_MISSING_FIELD" demo-app
+  dir="$(mktemp -d)"; run_resolver "$R" "$dir" "$CASES_MISSING_FIELD" sample-app
   check "${pfx}a case missing \`check\` exits 1" \
     "$([[ $LAST_RC -eq 1 ]] && echo 1 || echo 0)" "exit=$LAST_RC"
   check "${pfx}and names the missing field" \
@@ -219,7 +219,7 @@ main() {
   [[ -f "$RESOLVER" ]] || {
     printf 'eval-target resolver judge\n\n  evals/resolve_cases.py → MISSING\n' >&2
     printf '\nThe RUN-vs-SKIP decision is not made by any code, so it cannot be judged: a deleted\n' >&2
-    printf 'demo-app leaves /eval with nothing to run and nothing to say.\n' >&2
+    printf 'sample-app leaves /eval with nothing to run and nothing to say.\n' >&2
     exit 1
   }
   printf 'eval-target resolver judge — fixtures only; the repo tree is read, never written\n'

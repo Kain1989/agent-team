@@ -1,5 +1,5 @@
 {
-  "_comment": "MVP roster — a shareable, clone-and-run distillation of a paired-developer-agent team with a gated SDLC, a management portal, and a human approval gate. TWO squads: demo_squad (the one working team, on the bundled demo-app) + portal (the exception: it owns the Mission Control portal you are looking at). Lean staff: a Steve-Jobs-grounded pm_agent + one Apple-HIG design_lead. The supervisor is Claude (autonomous gates inside the workflow); the HUMAN is the approval gate via the portal. Design doctrine (divide by responsibility, pairs critique not debate, deterministic gates, name experts only for alignment tasks) is inherited from the research-backed parent system. The portal reads this file; jobs target a dev/project from it.",
+  "_comment": "MVP roster — a shareable, clone-and-run distillation of a paired-developer-agent team with a gated SDLC, a management portal, and a human approval gate. It ships with NO project squad: a fresh install has nothing to work on until /add-project clones, creates or adopts one, and /standup stops with that instruction rather than polling an empty board. Lean staff: a Steve-Jobs-grounded pm_agent + one Apple-HIG design_lead. The supervisor is Claude (autonomous gates inside the workflow); the HUMAN is the approval gate via the portal. The portal reads this file; jobs target a dev/project from it.",
   "manager": {
     "name": "EM (you + Claude)",
     "model_policy": {
@@ -22,9 +22,9 @@
         "4 TEST GATE — the suite must actually RUN and pass; exact commands recorded (deterministic gates compensate for same-family judge bias)",
         "5 REVIEW — parallel fresh-context reviewers; the writer never grades own work. BASE LENSES (always): correctness; conventions+tests. **PLUS a DESIGN-QUALITY lens whenever the change has an OBSERVABLE surface.** Without it every lens in the ring is an ENGINEERING-CORRECTNESS lens, so no layer is responsible for whether the screen is any good — and a design critique that runs after the commit cannot block anything. The design lens judges against DESIGN_RULEBOOK.md: numbered, citable rules; every finding MUST cite a rule id (E-01) and the id must EXIST in the rulebook. It first runs the deterministic judge `node standup/control/verify_design_quality.js <live url>` — the exit code IS the verdict, and it ships with `--self-test` proving it FAILS on deliberately broken UI (E-03) — then judges the [JUDGMENT] rules. E-07: a machine PASS proves NOTHING. A non-zero exit always fails, but exit 0 is not a pass: the judge catches 'looks wrong' and is blind to 'looks right, is lying'. E-02: one rule cited >=2 times is a SHARED-COMPONENT fix, never N per-file tickets. E-05: the gate judges the surface’s CURRENT state — not the diff, not who wrote it. THIS APPLIES ON EVERY DISPATCH PATH — /standup, /work, /team, and any ad-hoc task. An improvement that lands on only one path is exactly the quiet divergence this rule exists to stop.",
         "6 COMMIT on green — feature branch, stage ONLY the task files (in the code-task path this is the human-approved worktree commit)",
-        "7 PR/PUSH — optional; off by default in the MVP (the demo-app has a LOCAL origin, no network remote)",
+        "7 PR/PUSH — optional; off by default (a project added without a remote gets a LOCAL bare origin)",
         "8 MERGE — human-gated; left to you in your own checkout",
-        "9 DEPLOY — out of scope for the MVP demo-app"
+        "9 DEPLOY — out of scope for the MVP"
       ],
       "gated_requires_approval": ["the code-task commit (portal Approve)", "any push/merge/deploy", "credentials/secrets", "destructive ops", "repeated-failure tasks (2 consecutive red reviews -> escalate, do not loop)"],
       "review_rule": "Writer and reviewer are never the same context. Reviewers see diff + criteria, not the writer's reasoning. Structured critique, NOT free-form debate. Deterministic test gates compensate for same-family judge bias. Green is derived from the lenses actually planned for the task, never a hardcoded lens count."
@@ -43,7 +43,7 @@
     }
   },
   "operational_methods": {
-    "_comment": "Empty in the MVP — the parent system used this block to record host-specific methods (Snowflake keypair, git push paths, review-bot handles). The MVP demo-app is a local git repo with no external services, so there are no operational methods to inject."
+    "_comment": "Empty in the MVP — the parent system used this block to record host-specific methods (Snowflake keypair, git push paths, review-bot handles). A project added by /add-project is a local git repo with a local bare origin and no external services, so there are no operational methods to inject."
   },
   "teams": [],
   "staff": [

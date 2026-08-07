@@ -1,5 +1,5 @@
 ---
-description: Run the full agent-team standup + gated work cycle on demo-app (the whole squad)
+description: Run the full agent-team standup + gated work cycle (the whole roster)
 ---
 
 Run the agent team's full standup + gated work cycle now. Do it; don't just describe it.
@@ -22,7 +22,7 @@ Run the agent team's full standup + gated work cycle now. Do it; don't just desc
    into this file.)
 
 4. **Close out the tick:** summarize the EM board, what was worked, the green/committed counts,
-   and any commits on `demo-app` feature branches. Append a `## standup (<today>)` section to
+   and any commits on project feature branches. Append a `## standup (<today>)` section to
    `standup/log/<today>.md` (create it if missing) and update the "Last updated" line in
    `standup/BACKLOG.md`.
 

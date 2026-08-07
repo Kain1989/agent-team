@@ -6,9 +6,8 @@
 
 WHY THIS EXISTS AS CODE AND NOT AS A SENTENCE IN THE SKILL.
 
-`evals/cases.json` used to hardcode `"target": "demo-app"` with both cases importing `textkit`.
-demo-app is an OPTIONAL sample the docs invite you to delete once you have your own repo — and
-once it was gone, `/eval` had no target, no case could run, and nothing said so. The suite did not
+`evals/cases.json` used to hardcode a target that the shipped tree no longer carries. When that
+target was gone, `/eval` had no target, no case could run, and nothing said so. The suite did not
 report zero; it reported nothing, which reads exactly like a suite that has not been run yet.
 
 The skip decision is therefore made HERE, deterministically, rather than being requested of the

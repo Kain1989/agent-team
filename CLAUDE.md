@@ -13,7 +13,7 @@ directly handle the management / orchestration / governance primitives that run 
 `standup/control/`, `standup/workflows/`, the orchestration engine
 `standup/standup.workflow.js`, the plugin's own dirs (`.claude/`, `.claude-plugin/`,
 `skills/`, `hooks/`), the top-level docs — plus launching the workflow/team, planning,
-triage, and questions. **Every project — `demo-app/`, the portal (`standup/portal/`),
+triage, and questions. **Every project — the repos you added with `/add-project`, the portal (`standup/portal/`),
 `evals/`, research/reports — goes to the team.** Decision rule: "is this producing or
 changing a product, the portal, a report, or any code?" → the team does it (name the
 command/workflow); "is it roster / backlog / log / gates / orchestration / the plugin's
@@ -22,7 +22,7 @@ just describe it).
 
 This is enforced, not just advised: a SessionStart charter + a per-prompt reminder set
 the mode, and a **PreToolUse hook hard-blocks hand-editing any project path**
-(`demo-app/`, `standup/portal/`, `evals/`, `research/`, …) — see [`hooks/`](hooks/)
+(your project dirs, `standup/portal/`, `evals/`, `research/`, …) — see [`hooks/`](hooks/)
 (`supervisor_charter.py`, `route_reminder.py`, `supervisor_gate.py`), wired in
 [`hooks/hooks.json`](hooks/hooks.json). If you hit that block, route the work through the
 team; it isn't a bug to work around. Two release valves: a trivial/urgent **one-line
@@ -54,7 +54,7 @@ standup", or types **`/standup`** — execute the full gated standup + work cycl
 
 If your Claude Code build does **not** have the `Workflow` tool, orchestrate the same
 gated SDLC yourself with the **Task** tool, one phase at a time (see "The gated SDLC"
-below). Either way, the work lands as reviewed commits on `demo-app` feature branches —
+below). Either way, the work lands as reviewed commits on project feature branches —
 **never** pushed, never merged to a mainline; that's the human's call.
 
 ## Monitor + manage it in the portal (always bring this up)
@@ -64,7 +64,7 @@ whenever you run the team so the human can watch the squads, board, dev progress
 live log, and drive the **job queue + approvals**. Start it (type **`/portal`** or):
 
 ```
-./setup.sh                              # one time: venv, deps, gate config, demo-app git
+./setup.sh                              # one time: venv, deps, gate config, runtime dirs
 cd standup/portal && ./run_local.sh     # http://127.0.0.1:8770 (or $PORT)
 ```
 
@@ -76,7 +76,7 @@ worktree → review the diff → **Approve** → commit. (Details: `standup/port
 ## The team (roster: `standup/team.json`)
 
 - **Demo Dev Squad** — `dev_a` (builder) + `dev_b` (reviewer), a pair who challenge each
-  other in fresh context. Works on `demo-app/` (a small Python lib, `textkit`).
+  other in fresh context. Works on whatever project you add with `/add-project`.
 - **Team Portal Squad** *(the exception)* — `portal_backend` + `portal_frontend`. Owns the
   Mission Control portal itself.
 - **Staff** — `pm_agent` (Steve-Jobs-grounded scope/say-no + board) · `design_lead`
@@ -144,12 +144,15 @@ tasks land on **this** tick's board carrying their rule ids.
   workflow file — `node --check` PASSES on an unescaped backtick that truncates a prompt template
   and stops the engine from loading, so it is not sufficient.
 
-## The work target: `demo-app/`
+## The work target: whatever you added
 
-A tiny self-contained Python library (`textkit`) with a passing `pytest` suite and a
-short [`demo-app/BACKLOG.md`](demo-app/BACKLOG.md) of well-scoped tasks (truncate,
-slugify max-length, top-words, title-case). The team works here; it needs no credentials
-or network. It becomes a git repo on the first run (step 1 above).
+**There is no bundled sample.** `standup/team.json` ships with no project squad, so the
+first `/standup` stops and tells you to run `/add-project`. That command takes a repo
+three ways — `clone <git-url>`, `new <name>`, or `adopt <name>` for a folder already
+here — and guarantees the result is its own git repo with a baseline commit and an
+`origin` (a local bare one, offline, when the source has none). Until then there is
+nothing for the team to work on, and the engine says so rather than polling an empty
+board.
 
 ## Prerequisites
 

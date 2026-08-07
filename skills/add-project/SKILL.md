@@ -164,7 +164,7 @@ git -C "$ROOT/<name>" push -u origin HEAD
 Then **ignore it** — append `/.<name>-origin.git/` to the ROOT `.gitignore` in step 4, alongside
 `/<name>/`. A bare origin is neither covered by `/<name>/` nor a pointer entry; it is ordinary
 files, so an unignored one lets `git add -A` in the installation absorb the project's entire git
-object store. Measured: 23 staged paths, and a loose object that decompressed to
+object store. Measured: every object under it staged, including a loose one that decompressed to
 `DB_PASSWORD=hunter2`. That is worse than the gitlink this command was built to prevent — a gitlink
 is a dangling pointer, this is the content itself, and it travels when the user pushes their own
 agent-team repo.

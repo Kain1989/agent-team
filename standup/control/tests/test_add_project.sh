@@ -382,7 +382,7 @@ PY
   # --- the missing-gate branch. It had NO case and NO mutation, because build_project always
   # copies the real gate (line ~74) — so the one shape where the deny list is inert was the one
   # shape never exercised. `skills/init` produces exactly that shape: it scaffolds standup/,
-  # demo-app/, setup.sh and .env.example, and never hooks/.
+  # setup.sh and .env.example, and never hooks/.
   d="$(build_project)"; apply_add "$d" "myapp" none; rm -rf "$d/proj/hooks"
   LAST_OUT="$(python3 "$VERIFY" added myapp --root "$d/proj" 2>&1)"; LAST_RC=$?
   check "${pfx}an unreadable supervisor_gate.py FAILS, it does not report ok" \

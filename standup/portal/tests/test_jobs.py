@@ -403,8 +403,8 @@ def test_api_create_resolves_dev_target_folder(client):
         "prompt": "look at the portal"})
     assert r.status_code == 202, r.text
     job = r.json()["job"]
-    assert job["target_id"] == "dev_a"
-    assert job["target_folder"] == "demo-app"
+    assert job["target_id"] == "portal_backend"
+    assert job["target_folder"] == "standup/portal"
 
 
 def test_api_create_rejects_unknown_type(client):

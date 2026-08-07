@@ -5,7 +5,7 @@ description: Start the Mission Control portal (the team's visualization + manage
 Start the Mission Control portal so the human can watch and manage the agent team. Do it now.
 
 1. **Install once if needed.** If `standup/.venv` does not exist, run `./setup.sh` (venv, deps,
-   gate config, and the demo-app local git + offline origin).
+   gate config, runtime dirs).
 
 2. **Launch the portal in the background** (it binds to 127.0.0.1 only) and capture the URL:
    ```

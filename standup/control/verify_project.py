@@ -228,7 +228,7 @@ def check_added(root, name, results):
         # _fail, not _ok. The docstring above already said this reports NOT CHECKED and FAILS, and
         # the sibling `check_removed` takes the same line ("a check that cannot fail is not a
         # check") — but the caller called _ok, so a line reading "NOT CHECKED, not a pass" WAS a
-        # pass. Reachable for real: `skills/init` scaffolds standup/, demo-app/, setup.sh and
+        # pass. Reachable for real: `skills/init` scaffolds standup/, setup.sh and
         # .env.example, never hooks/, so on a scaffolded install the deny list was inert and a
         # squad pointed at the engine's own control plane went through.
         _fail(results, "the name is not management territory",
@@ -358,7 +358,7 @@ def check_added(root, name, results):
 
     # The local bare origin created for `new` / origin-less `adopt` lives at
     # <root>/.<name>-origin.git and is NEITHER covered by `/<name>/` NOR a pointer entry — it is
-    # ordinary files. Measured: an install whose .gitignore had only `/myapp/` staged 23 paths under
+    # ordinary files. Measured: an install whose .gitignore had only `/myapp/` staged every path under
     # `.myapp-origin.git`, and a loose object there decompressed to `DB_PASSWORD=hunter2`. That is
     # worse than the gitlink this file was written for: a gitlink is a dangling pointer, this is the
     # content itself, and it travels when the user pushes their own agent-team repo.
