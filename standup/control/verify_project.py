@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -68,10 +69,23 @@ def gitignore_lines(root):
         return [ln.strip() for ln in fh]
 
 
+# Index modes that mean "this entry points somewhere instead of holding content".
+#   160000  gitlink   — an embedded repo recorded as a bare commit id nobody else can fetch
+#   120000  symlink   — a blob holding a path, often absolute and outside the repo
+DANGEROUS_MODES = {"160000": "gitlink (embedded repo)", "120000": "symlink blob"}
+
+
 def gitlinked_paths(root):
-    """Paths git has staged as gitlinks (mode 160000) — an embedded repo recorded as a pointer.
+    """Index entries staged as a pointer rather than as content — see DANGEROUS_MODES.
 
     Runs against the index only; it never stages anything itself.
+
+    120000 is here because the .gitignore step cannot cover it. A trailing-slash pattern
+    (`/name/`) is DIRECTORY-ONLY, and git does not treat a symlink-to-directory as a directory —
+    measured: `check-ignore /linkproj/` returns 1 (no match) while the same pattern matches a real
+    directory, and `git add -A` then stages the symlink as 120000. Refusing to adopt a symlink
+    closes that entrance, but a checker that only looks for 160000 would keep reporting "ok, no
+    gitlink" about a mode it cannot see, and this file exists to stop exactly that class.
     """
     try:
         out = subprocess.run(["git", "-C", root, "ls-files", "-s"],
@@ -83,27 +97,160 @@ def gitlinked_paths(root):
     found = []
     for line in out.stdout.splitlines():
         parts = line.split(maxsplit=3)
-        if len(parts) >= 4 and parts[0] == "160000":
-            found.append(parts[3])
+        if len(parts) >= 4 and parts[0] in DANGEROUS_MODES:
+            found.append((parts[3], parts[0]))
     return found
+
+
+def em_owned_names(root):
+    """Top-level names the supervisor gate treats as management, not project, territory.
+
+    DERIVED from hooks/supervisor_gate.py's own constants at runtime — never transcribed. A
+    hand-written copy of this list had already drifted: it named four directories and was missing
+    `hooks/` and `skills/`, both of which the gate classifies as plugin-governance paths. The rule
+    in this repo is that restating a list loses the load-bearing part of it; the gate is the single
+    source, so read the gate.
+
+    Returns None when the gate cannot be read or fully parsed. The caller reports that as NOT
+    CHECKED and FAILS — an absent protection reported as `ok` is the shape this file exists to stop,
+    and `check_removed` already takes that line for its own unreadable case.
+    """
+    gate = os.path.join(root, "hooks", "supervisor_gate.py")
+    try:
+        src = open(gate, encoding="utf-8").read()
+    except OSError:
+        return None
+    names = set()
+    for const in ("PLUGIN_DIRS", "STANDUP_ALLOW_DIRS", "STANDUP_ALLOW_FILES"):
+        m = re.search(const + r"\s*=\s*\{([^}]*)\}", src)
+        if not m:
+            # ALL THREE must parse. Matching two of three and continuing would silently shrink the
+            # deny list, and a shrunken deny list is indistinguishable from a satisfied one. If the
+            # gate is refactored (say `frozenset((...))`) this reports unreadable, not a guess.
+            return None
+        names |= {x.strip().strip("\"'") for x in m.group(1).split(",") if x.strip()}
+    # Seeded AFTER a successful parse, never before: seeding first makes the set non-empty and lets
+    # an unreadable gate masquerade as a parse that worked.
+    names.add("standup")          # the engine root itself, named by the gate's own path logic
+    return {n for n in names if n}
+
+
+def _git(dirpath, *args):
+    """Run a git command in `dirpath`; return (rc, stdout.strip())."""
+    try:
+        out = subprocess.run(["git", "-C", dirpath] + list(args),
+                             capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return 1, ""
+    return out.returncode, out.stdout.strip()
+
+
+def repo_identity(dirpath):
+    """Is `dirpath` its OWN git repo root, and does it have a commit?
+
+    Returns (is_own_root, has_commit).
+
+    THE ORDER OF THESE TWO QUESTIONS IS LOAD-BEARING, and asking them the other way round is the
+    bug this function was written to remove. Inside a directory that is NOT a repo but sits under
+    one — the normal shape for a project folder in a cloned agent-team install — git answers for
+    the PARENT:
+
+        git -C outer/myproj rev-list --count HEAD       -> 1      rc=0
+        git -C outer/myproj rev-parse --is-inside-work-tree -> true
+        git -C outer/myproj rev-parse --show-toplevel    -> .../outer     (NOT myproj)
+
+    So a commit test asked first is answered by the parent and proves nothing about the project.
+    `show-toplevel == realpath(dirpath)` is the only one of the three that discriminates, and it
+    must come first; the commit test is meaningful only once we have established which repo is
+    being interrogated.
+
+    It also replaces `os.path.isdir(.git)` outright rather than sitting beside it, because that
+    test is wrong in both directions:
+      * a `git worktree` or submodule checkout has a `.git` FILE (a path pointer, not a directory), so isdir
+        says False about a directory git handles perfectly — the likely shape of an adopted folder;
+      * a symlink to a repo makes `os.path.isdir(link/.git)` return True, because Python follows
+        the link.
+    The toplevel test is correct for all four shapes.
+    """
+    rc, top = _git(dirpath, "rev-parse", "--show-toplevel")
+    if rc != 0 or not top:
+        return False, False
+    try:
+        same = os.path.realpath(top) == os.path.realpath(dirpath)
+    except OSError:
+        return False, False
+    if not same:
+        return False, False
+    rc_head, _ = _git(dirpath, "rev-parse", "--verify", "HEAD")
+    return True, rc_head == 0
+
+
+def has_origin(dirpath):
+    rc, out = _git(dirpath, "remote")
+    return rc == 0 and "origin" in out.split()
 
 
 def check_added(root, name, results):
     roster, _ = load_roster(root)
 
     # 1. the directory exists and is a git repo with an origin
+    # The name must not collide with management territory. Checked case-insensitively for the same
+    # reason as the squad id below.
+    owned = em_owned_names(root)
+    if not owned:
+        _ok(results, "the name is not management territory",
+            "(could not read hooks/supervisor_gate.py — NOT CHECKED, not a pass)")
+    elif name.lower() in {o.lower() for o in owned}:
+        _fail(results, "the name is not management territory",
+              "%r is a path the supervisor gate classifies as management/governance, not project "
+              "territory. Adopting it would point a dev squad at the plugin's own control plane. "
+              "Pick another name." % name)
+    else:
+        _ok(results, "the name is not management territory")
+
     proj = os.path.join(root, name)
     if not os.path.isdir(proj):
         _fail(results, "the project directory exists",
-              "%s is not there — the clone did not land, or `name` differs from the squad id" % proj)
-    elif not os.path.isdir(os.path.join(proj, ".git")):
-        _fail(results, "the project is a git repo",
-              "%s has no .git — the SDLC commits to a feature branch and cannot" % proj)
+              "%s is not there — the source step did not land, or `name` differs from the squad id"
+              % proj)
+    elif os.path.islink(proj):
+        _fail(results, "the project directory is not a symlink",
+              "%s is a symlink. `/%s/` in .gitignore will NOT match it (trailing-slash patterns are "
+              "directory-only and git does not treat a symlink-to-directory as a directory), so "
+              "`git add -A` stages it as mode 120000 — a blob holding a path out of the tree. "
+              "Move or copy the real directory in instead." % (proj, name))
     else:
-        _ok(results, "the project directory exists and is a git repo", proj)
+        own_root, has_commit = repo_identity(proj)
+        if not own_root:
+            _fail(results, "the project is its own git repo",
+                  "%s is not a git repo root. A run against it would not fail quietly: `git -C` "
+                  "resolves to the ENCLOSING repo, so `checkout -b` moves your agent-team "
+                  "installation's HEAD and `git add -A` stages unrelated in-flight work. "
+                  "/add-project initialises a repo for exactly this reason." % proj)
+        elif not has_commit:
+            _fail(results, "the project has at least one commit",
+                  "%s is a repo with an unborn HEAD. Every file in it is untracked, and "
+                  "`git diff` cannot see untracked files — so the review ring reads an EMPTY diff "
+                  "no matter what the developer changed. A baseline commit is what makes the work "
+                  "reviewable." % proj)
+        else:
+            _ok(results, "the project is its own git repo with a baseline commit", proj)
+            if not has_origin(proj):
+                _fail(results, "the project has an origin remote",
+                      "%s has no `origin`. The portal's code-task flow resolves origin's default "
+                      "branch to create its worktree and cannot run without it — the approve-then-"
+                      "commit loop would be unavailable for this project. /add-project creates a "
+                      "local bare origin (offline, no network) for sources that have none." % proj)
+            else:
+                _ok(results, "the project has an origin remote")
 
     # 2. a squad with that id, carrying two paired ACTIVE developers whose folder is the project
-    squad = next((t for t in roster.get("teams", []) if t.get("id") == name), None)
+    # Case-INSENSITIVE. macOS and Windows default to case-insensitive filesystems, so `MyApp` and
+    # `myapp` are one directory while an exact `==` sees two distinct squad ids — measured: after
+    # `mkdir MyApp`, `os.path.isdir("myapp")` is True. An exact comparison would let `adopt MyApp`
+    # slip past the duplicate check and produce two squads sharing one folder.
+    squad = next((t for t in roster.get("teams", [])
+                  if str(t.get("id", "")).lower() == name.lower()), None)
     if squad is None:
         ids = ", ".join(t.get("id", "?") for t in roster.get("teams", [])) or "(none)"
         _fail(results, "the roster has a squad with this id",
@@ -164,15 +311,36 @@ def check_added(root, name, results):
     else:
         _ok(results, ".gitignore ignores the cloned repo", want)
 
+    # The local bare origin created for `new` / origin-less `adopt` lives at
+    # <root>/.<name>-origin.git and is NEITHER covered by `/<name>/` NOR a pointer entry — it is
+    # ordinary files. Measured: an install whose .gitignore had only `/myapp/` staged 23 paths under
+    # `.myapp-origin.git`, and a loose object there decompressed to `DB_PASSWORD=hunter2`. That is
+    # worse than the gitlink this file was written for: a gitlink is a dangling pointer, this is the
+    # content itself, and it travels when the user pushes their own agent-team repo.
+    origin_dir = ".%s-origin.git" % name
+    if os.path.isdir(os.path.join(root, origin_dir)):
+        rc_ign, _ = _git(root, "check-ignore", "-q", origin_dir)
+        if rc_ign != 0:
+            _fail(results, "the local bare origin is ignored",
+                  "%s exists but is NOT ignored — `git add -A` in this installation absorbs the "
+                  "project's git objects, secrets included, into its own history. Add "
+                  "`/%s/` to .gitignore (or the generic `.*-origin.git/`)."
+                  % (os.path.join(root, origin_dir), origin_dir))
+        else:
+            _ok(results, "the local bare origin is ignored", origin_dir)
+
     links = gitlinked_paths(root)
     if links is None:
-        _ok(results, "no embedded repo is staged as a gitlink", "(this root is not a git repo — n/a)")
-    elif any(p == name or p.startswith(name + "/") for p in links):
-        _fail(results, "no embedded repo is staged as a gitlink",
-              "%r is staged with mode 160000. Unstage it (`git rm --cached %s`) and make sure "
-              "%r is in .gitignore" % (name, name, want))
+        _ok(results, "the project is not staged as a pointer", "(this root is not a git repo — n/a)")
     else:
-        _ok(results, "no embedded repo is staged as a gitlink")
+        hit = next(((pth, mode) for pth, mode in links
+                    if pth == name or pth.startswith(name + "/")), None)
+        if hit:
+            _fail(results, "the project is not staged as a pointer",
+                  "%r is staged with mode %s — %s. Unstage it (`git rm --cached %s`) and make sure "
+                  "%r is in .gitignore" % (hit[0], hit[1], DANGEROUS_MODES[hit[1]], name, want))
+        else:
+            _ok(results, "the project is not staged as a pointer")
 
 
 def check_removed(root, name, results, code_before=None):

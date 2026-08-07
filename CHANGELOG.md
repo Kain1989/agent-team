@@ -3,6 +3,130 @@
 All notable changes to the **agent-team** plugin. Format: [Keep a Changelog](https://keepachangelog.com/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] — 2026-08-06
+
+**`/add-project` takes three kinds of source, and all three end in a project the team can actually
+review.**
+
+### The problem this solves
+
+`/add-project` could only clone. Kain's cases are broader — start something new here, or register a
+folder already copied in — and both of those produce a directory that a clone never does: **not a
+git repo**, or **a repo with no commit**, or **a repo with no `origin`**. Each of those breaks a
+different part of the pipeline, and two of them break it *silently*:
+
+- **A project that is not its own repo does not fail quietly — it writes into your installation.**
+  In a cloned agent-team install the plugin root is itself a repo, so `git -C <project> …` resolves
+  to the enclosing one. Measured: `checkout -b feature/task-1` moved the **outer** repo's HEAD, and
+  `git add -A` staged unrelated in-flight work from elsewhere in the tree. Several sessions share
+  that working tree — it is why the daily push job never auto-commits.
+- **`git -C` only warns when there is no repo at all** — `diff` exits 129 there, other porcelain
+  128. Inside a parent repo the same `diff` exits **0 with empty output**.
+- **A repo with an unborn HEAD is the same failure by another route.** Untracked files are
+  invisible to `git diff`, so the review ring reads an empty diff whatever the developer changed.
+- **No `origin` disables the portal's code-task loop**, which is this plugin's headline feature —
+  `worktree.py` resolves origin's default branch and hard-errors without one. The skill file already
+  carried that warning; the two new modes would have produced exactly that repo.
+
+### What changed
+
+- **Three modes** — `clone` / `new` / `adopt`, explicit. The bare `<git-url>` form still works
+  (0.4.0 shipped it) but only when the first token is genuinely a URL; `^[A-Za-z]:`, `./`, `../`,
+  `/` and a lone mode word are all excluded, and anything else refuses with the three forms rather
+  than guessing. Guessing a mode is how you clone over a directory somebody meant to adopt.
+- **One guarantee for all three**: own git repo, ≥1 commit, an `origin` — with a local bare origin
+  created for `new` and for `adopt` when the source has none, generalising the offline mechanism
+  `setup.sh` already uses. An existing `origin` is never touched: a dead one still resolves locally
+  and fails honestly later, and re-pointing someone's remote is not this command's business.
+- **`adopt` scans for secrets before committing** with the plugin's own `guardrails.py`, refuses on
+  a hit naming the files, and seeds a `.gitignore` **derived from what is actually present** — an
+  adopted folder is *more* likely to hold a `.env` than a clone, precisely because nobody has ever
+  written it one. Measured at ~20,000 files/s: a 3,600-file tree costs 0.17s, so this is not a slow
+  refusal path. **The seeded `.gitignore` is committed in the baseline and named in the output** —
+  a file we wrote into the user's project is something they should be told about, not something to
+  discover in `git log`, and one that is not in the baseline cannot protect the baseline commit,
+  which is the most dangerous one.
+- **`--allow-empty` was considered for the baseline and rejected on measurement.** It solves the
+  secret problem and reintroduces the empty-diff one: pre-existing files stay untracked, so an edit
+  to the user's source produced `[]` where a tracked baseline produced a normal diff. The judge
+  demonstrates both.
+- **Author identity is never invented.** `Author identity unknown` is a refusal with the two
+  `git config` lines. The bundled sample uses a `demo`/`demo@local` identity because it is a
+  throwaway; attributing a commit in someone's own source to a fabricated author is a different
+  decision.
+- **`new` writes `kind: none` and no `inspect` at all** — not an empty string, not a placeholder.
+  Nothing validates `inspect` when kind is `none`, so an invented value passes every check and stays
+  wrong. The `how` note records the true behaviour instead of "revisit later": `_touchedFrontend`
+  turns on both `DESIGN_LENS` and `VISUAL_DQ` the moment a diff touches frontend paths or
+  extensions, regardless of the declaration, so a `new` project is gated the instant it grows a UI.
+
+### Detection rebuilt — `os.path.isdir(.git)` is wrong in both directions
+
+Replaced outright, not supplemented:
+
+- a `git worktree` or submodule checkout has a `.git` **file** (a path pointer), so `isdir`
+  called a directory git handles perfectly "not a repo" — the likely shape of an adopted folder;
+- a **symlink** to a repo makes `os.path.isdir(link/.git)` return True, because Python follows it.
+
+The test is now `git -C <dir> rev-parse --show-toplevel` == `realpath(<dir>)`, **then**
+`rev-parse --verify HEAD`. **That order is load-bearing** and is written into the code: inside a
+non-repo child of a repo, `rev-list --count HEAD` returns 1 and `is-inside-work-tree` returns true
+— the parent answers for the child. Only the toplevel comparison discriminates, so asking about
+commits first proves nothing about the project.
+
+### Two things the checker could not see
+
+- **Symlinked project directories are refused** — `/name/` in `.gitignore` does **not** match a
+  symlink (trailing-slash patterns are directory-only; measured `check-ignore` rc=1 against rc=0 for
+  a real directory), so `git add -A` stages it as mode **120000**, a blob holding a path out of the
+  tree. Refusing closes the entrance; separately, `gitlinked_paths()` now flags `120000` as well as
+  `160000`, because a checker should not keep reporting green about a mode it cannot see.
+- **Squad ids compare case-insensitively.** macOS and Windows default to case-insensitive
+  filesystems, so `MyApp` and `myapp` are one directory while an exact `==` sees two ids — measured:
+  after `mkdir MyApp`, `isdir("myapp")` is True. `adopt MyApp` would have slipped past the duplicate
+  check and produced two squads sharing one folder.
+- **The management-path deny list is derived at runtime** from `hooks/supervisor_gate.py`'s own
+  constants, never transcribed. The hand-written list in the plan already omitted `hooks/` and
+  `skills/`.
+
+### The local bare origin has to be ignored too
+
+Creating `<root>/.<name>-origin.git` and ignoring only `/<name>/` leaves the bare origin as ordinary
+files — neither covered by that pattern nor a pointer entry. Measured on an installed shape: **23
+staged paths** under it, and a loose object that decompressed to `DB_PASSWORD=hunter2`. That is
+worse than the gitlink this command was built to prevent: a gitlink is a dangling pointer, this is
+the content, and it travels when the user pushes their own agent-team repo. The shipped `.gitignore`
+now carries a **pattern** (`.*-origin.git/`) rather than a hardcoded sample line, `/add-project`
+appends the specific entry too, and the checker fails on an unignored one.
+
+### `adopt` refuses secret-shaped files by NAME, because content matching does not see them
+
+The derived `.gitignore` was written only "if the directory has no `.gitignore`" — so one stale
+`*.pyc` skipped it and `.env` went into the baseline commit. And the scanner behind it does not
+catch what a real dotenv looks like: measured, `DB_PASSWORD=hunter2`, `API_KEY=abcdef123456`,
+`DATABASE_URL=postgres://u:s3cr3t@…` and even `PASSWORD="hunter2"` are all **missed** — only
+prefixed tokens (`AKIA…`, `ghp_…`) are caught.
+
+So: the ignore lines are ensured unconditionally, and the refusal leads with a **filename** test
+(`.env`, `.env.*`, `*.pem`, `id_rsa`, `*.p12`, `credentials.json`, …) with the content scan behind
+it. Running `check_output` on the staged diff was considered and rejected — it calls the same
+`scan_secrets` that missed all three lines, so it would have added a step without adding a signal.
+
+### Judges
+
+`test_add_project.sh` grows to **22 checker branches**, each with an independent covering case and
+its own `if False:` mutation — written in the same edit as the branch, not added after review.
+Its `--self-test` runs the mutations **concurrently** (~24s instead of ~2 minutes) with two gates
+that the serial version got for free and the parallel one did not: it **asserts every job reported
+back** (a subshell that dies before writing its verdict used to be invisible — measured: 17 verdicts
+printed, 18 claimed, exit 0), and it **requires the unmutated suite to be green first**, because
+"did this case go red" is meaningless for a case that was already red.
+
+Group D demonstrates rather than asserts: it drives git into the non-repo shape and shows the
+enclosing HEAD move and the unrelated file being staged, and it shows an `--allow-empty` baseline
+producing an empty diff where a tracked one produces a real one. Those are the two rules hardest to
+argue from a description, and they are the ones a future reader will be tempted to relax.
+
 ## [0.4.0] — 2026-08-06
 
 **A fresh install had a broken path at both ends: the team would run a whole tick against a roster

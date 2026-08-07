@@ -27,7 +27,11 @@ standup/log/*.md
 
 # demo-app's local git + the local bare origin are created by setup.sh at install
 demo-app/.git/
-.demo-app-origin.git/
+# Local bare origins. /add-project creates one per project that arrives without a remote
+# (`.<name>-origin.git`), so this must be a PATTERN — a hardcoded line covered only the
+# bundled sample, and an unignored bare origin pulls the project's git objects, secrets
+# included, into this installation's own history on the next `git add -A`.
+.*-origin.git/
 
 # env / secrets
 .env

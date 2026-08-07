@@ -279,14 +279,25 @@ merge; the trusted worker does that, and only after you approve. Nothing is ever
 ## Point it at your repo
 
 ```
-/add-project https://github.com/you/your-repo --kind web --inspect "(npm start >/tmp/app.log 2>&1 &) && sleep 8 && curl -sS -f http://localhost:3000"
-/sync-roster
-/work "the first thing you want done"
+/add-project clone https://github.com/you/your-repo --kind web --inspect "(npm start >/tmp/app.log 2>&1 &) && sleep 8 && curl -sS -f http://localhost:3000"
+/add-project new   my-idea    --kind none
+/add-project adopt already-here --kind cli --inspect "pytest -q"
 ```
 
-`/add-project` clones the repo in, creates a squad with a pair of developers pointed at it, records
-the `review_surface` (`kind` + `inspect`) the pipeline refuses to run without, and adds the clone to
-`.gitignore` so `git add -A` here does not record it as a gitlink. Those four used to be manual and
+Then `/sync-roster`, then `/work "the first thing you want done"`.
+
+Three sources, one outcome. **clone** brings a repo in; **new** starts an empty project; **adopt**
+registers a folder you already put here. All three create a squad with a pair of developers pointed
+at it, record the `review_surface` (`kind` + `inspect`) the pipeline refuses to run without, add the
+directory to `.gitignore` so `git add -A` here does not record it as a gitlink, and leave the
+project as **its own git repo with a baseline commit and an `origin`**.
+
+That last part is load-bearing, not tidiness. A project directory that is not its own repo is not
+merely unreviewable — `git -C` resolves to the *enclosing* repo, so a run against it moves **your
+installation's** HEAD and stages unrelated work. A repo with no commit leaves every file untracked
+and `git diff` blind. No `origin` disables the portal's approve-then-commit loop. `new` and `adopt`
+therefore get a **local bare origin** (offline, no account); an existing `origin` is never touched.
+`adopt` scans for secrets before it commits anything and refuses on a hit. Those four used to be manual and
 order-dependent; three of them were documented and the fourth was not, which is how people ended up
 with a team aimed at a directory that was not there.
 

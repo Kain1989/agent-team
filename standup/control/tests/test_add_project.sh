@@ -68,6 +68,10 @@ build_project() { # -> echoes the root
 }
 JSON
   printf '# venv\nstandup/.venv/\n' > "$d/proj/.gitignore"
+  # The REAL gate file, copied read-only: the deny list is DERIVED from its constants at runtime,
+  # so a fixture with a stub would be testing a stub. If the real constants change, this judge
+  # changes with them — which is the point of deriving rather than transcribing.
+  mkdir -p "$d/proj/hooks" && cp "$REPO/hooks/supervisor_gate.py" "$d/proj/hooks/"
   git -C "$d/proj" init -q -b main
   git -C "$d/proj" add -A && git -C "$d/proj" "${GIT_ID[@]}" commit -q -m init
   # the repo the user asks us to clone
@@ -85,6 +89,20 @@ apply_add() { # <sandbox> <name> <skip: none|clone|squad|surface|inspect|gitigno
   [[ "$skip" == "clone" ]] || git -C "$root" clone -q "$d/upstream" "$name"
   # `nogit`: the directory exists but is not a repo — a copied folder, or a clone that half-failed.
   [[ "$skip" == "nogit" ]] && { mkdir -p "$root/$name"; rm -rf "$root/$name/.git"; }
+  # `unborn`: a repo with no commit. Everything in it is untracked, so `git diff` shows nothing.
+  [[ "$skip" == "unborn" ]] && { rm -rf "$root/$name"; mkdir -p "$root/$name";
+                                 git -C "$root/$name" init -q -b main; echo x > "$root/$name/a.py"; }
+  # `noorigin`: a proper repo with a baseline commit but no remote — what `new`/`adopt` produce
+  # before step 1c. The portal's code-task flow cannot build a worktree without one.
+  [[ "$skip" == "noorigin" ]] && { git -C "$root/$name" remote remove origin >/dev/null 2>&1 || true; }
+  # `symlink`: the target is a link to a directory. `/name/` will not ignore it and `git add -A`
+  # stages it as mode 120000.
+  [[ "$skip" == "symlink" ]] && { rm -rf "$root/$name"; mkdir -p "$d/real"; echo y > "$d/real/b.py";
+                                  ln -s "$d/real" "$root/$name"; }
+  # `worktree`: a linked worktree — its `.git` is a FILE, which the old isdir() test called "not a
+  # repo". git handles it perfectly; the toplevel test must accept it.
+  [[ "$skip" == "worktree" ]] && { rm -rf "$root/$name";
+                                   git -C "$d/upstream" worktree add -q "$root/$name" -b adopted 2>/dev/null; }
   [[ "$skip" == "gitignore" ]] || printf '/%s/\n' "$name" >> "$root/.gitignore"
   [[ "$skip" == "squad" ]] && return 0
   SKIP="$skip" NAME="$name" python3 - "$root/standup/team.json" <<'PY'
@@ -160,7 +178,7 @@ run_cases() { # <label-prefix>
   # Grep the FAIL line, not the phrase: the ok line reads "no embedded repo is staged as a
   # gitlink" and contains the same words, so a loose match passed whether the check fired or not.
   check "${pfx}...and the verifier reports the gitlink too" \
-    "$(grep -q 'FAIL no embedded repo is staged as a gitlink' <<<"$LAST_OUT" && echo 1 || echo 0)"
+    "$(grep -q 'FAIL the project is not staged as a pointer' <<<"$LAST_OUT" && echo 1 || echo 0)"
   rm -rf "$d"
 
   d="$(build_project)"; apply_add "$d" "myapp" squad; verify "$d/proj" myapp
@@ -192,8 +210,8 @@ run_cases() { # <label-prefix>
 
   d="$(build_project)"; apply_add "$d" "myapp" nogit; verify "$d/proj" myapp
   check "${pfx}a directory that is not a git repo is caught" \
-    "$([[ $LAST_RC -eq 1 ]] && grep -q 'FAIL the project is a git repo' <<<"$LAST_OUT" && echo 1 || echo 0)" \
-    "the SDLC commits to a feature branch and cannot without one"
+    "$([[ $LAST_RC -eq 1 ]] && grep -q 'FAIL the project is its own git repo' <<<"$LAST_OUT" && echo 1 || echo 0)" \
+    "git -C would resolve to the ENCLOSING repo and move ITS head"
   rm -rf "$d"
 
   d="$(build_project)"; apply_add "$d" "myapp" badpair; verify "$d/proj" myapp
@@ -206,6 +224,41 @@ run_cases() { # <label-prefix>
   check "${pfx}an unknown review_surface.kind is caught (--kind webb)" \
     "$([[ $LAST_RC -eq 1 ]] && grep -q 'FAIL review_surface.kind is one the engine knows' <<<"$LAST_OUT" && echo 1 || echo 0)" \
     "one of the four advertised invariants — a typo here reaches the engine otherwise"
+  rm -rf "$d"
+
+  d="$(build_project)"; apply_add "$d" "myapp" unborn; verify "$d/proj" myapp
+  check "${pfx}a repo with an unborn HEAD is caught" \
+    "$([[ $LAST_RC -eq 1 ]] && grep -q 'FAIL the project has at least one commit' <<<"$LAST_OUT" && echo 1 || echo 0)" \
+    "untracked files are invisible to git diff — the review ring would read an empty diff"
+  rm -rf "$d"
+
+  d="$(build_project)"; apply_add "$d" "myapp" noorigin; verify "$d/proj" myapp
+  check "${pfx}a repo with no origin is caught" \
+    "$([[ $LAST_RC -eq 1 ]] && grep -q 'FAIL the project has an origin remote' <<<"$LAST_OUT" && echo 1 || echo 0)" \
+    "the portal's code-task worktree resolves origin's default branch and cannot run without it"
+  rm -rf "$d"
+
+  d="$(build_project)"; apply_add "$d" "myapp" symlink; verify "$d/proj" myapp
+  check "${pfx}a symlinked project directory is caught" \
+    "$([[ $LAST_RC -eq 1 ]] && grep -q 'FAIL the project directory is not a symlink' <<<"$LAST_OUT" && echo 1 || echo 0)"
+  rm -rf "$d"
+
+  d="$(build_project)"; apply_add "$d" "myapp" worktree; verify "$d/proj" myapp
+  check "${pfx}a linked WORKTREE is accepted (its .git is a file, not a dir)" \
+    "$(grep -q 'FAIL the project is its own git repo' <<<"$LAST_OUT" && echo 0 || echo 1)" \
+    "the old isdir(.git) test called this 'not a repo'; git handles it fine"
+  rm -rf "$d"
+
+  d="$(build_project)"; apply_add "$d" "hooks" none 2>/dev/null; verify "$d/proj" hooks
+  check "${pfx}a management-territory name is caught (derived, not transcribed)" \
+    "$([[ $LAST_RC -eq 1 ]] && grep -q 'FAIL the name is not management territory' <<<"$LAST_OUT" && echo 1 || echo 0)" \
+    "hooks/ and skills/ were both missing from a hand-written copy of this list"
+  rm -rf "$d"
+
+  d="$(build_project)"; apply_add "$d" "MyApp" none; verify "$d/proj" myapp
+  check "${pfx}a case-only id collision is caught" \
+    "$(grep -q 'FAIL the roster has a squad with this id' <<<"$LAST_OUT" && echo 0 || echo 1)" \
+    "MyApp and myapp are one directory on a case-insensitive filesystem"
   rm -rf "$d"
 
   d="$(build_project)"; apply_add "$d" "myapp" clone; verify "$d/proj" myapp
@@ -267,6 +320,103 @@ PY
     "$(grep -q 'staff pm_agent.scope_folders -> myapp' <<<"$LAST_OUT" && echo 1 || echo 0)"
   rm -rf "$d"
 
+  # --- S3: branches that shipped with no covering case, each now exercised ---
+  # `gitlinked_paths()` is tested DIRECTLY, because 120000 is not reachable through check_added:
+  # if the project dir is a symlink, `islink(proj)` refuses first, and a symlink INSIDE a project
+  # never reaches the outer index at all — a nested repo stages as ONE 160000 entry (measured).
+  # So the mode support is defence in depth: the refusal closes the entrance, and this keeps the
+  # checker from reporting green about a mode it cannot see if one ever arrives another way.
+  #
+  # The first version of this case pointed check_added at the symlink and grepped for the literal
+  # "120000" — which the symlink-REFUSAL message also contains, so it passed either way, and then
+  # failed unmutated while --self-test still scored it "correctly went RED". Both bugs are fixed:
+  # the assertion is specific, and the baseline-green gate below catches an always-red case.
+  d="$(mktemp -d)"; git -C "$d" init -q -b main
+  mkdir -p "$d/elsewhere"; echo z > "$d/elsewhere/z.txt"; ln -s "$d/elsewhere" "$d/linkdir"
+  git -C "$d" add -A >/dev/null 2>&1
+  LAST_OUT="$(STANDUP_VERIFY_PROJECT="$VERIFY" python3 -c '
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("vp", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+print(m.gitlinked_paths(sys.argv[2]))' "$VERIFY" "$d" 2>&1)"
+  check "${pfx}a staged symlink blob (120000) is caught" \
+    "$(grep -q "'linkdir', '120000'" <<<"$LAST_OUT" && echo 1 || echo 0)" \
+    "gitlinked_paths saw: $LAST_OUT"
+  rm -rf "$d"
+
+  d="$(build_project)"
+  python3 - "$d/proj/standup/team.json" <<'PY'
+import json,sys
+p=sys.argv[1]; dd=json.load(open(p))
+dd["teams"].append({"id":"fresh","name":"Fresh",
+  "review_surface":{"kind":"none","label":"no face yet","how":"new project"},
+  "developers":[{"id":"fresh_a","folder":"fresh","active":True,"pair":"fresh_b"},
+                {"id":"fresh_b","folder":"fresh","active":True,"pair":"fresh_a"}]})
+json.dump(dd,open(p,"w"),indent=2)
+PY
+  git -C "$d/proj" clone -q "$d/upstream" fresh; printf '/fresh/\n' >> "$d/proj/.gitignore"
+  LAST_OUT="$(python3 "$VERIFY" added fresh --root "$d/proj" 2>&1)"; LAST_RC=$?
+  check "${pfx}kind none with no inspect is ACCEPTED" \
+    "$([[ $LAST_RC -eq 0 ]] && echo 1 || echo 0)" \
+    "this is exactly what \`new\` writes — tightening the guard breaks every new project"
+  rm -rf "$d"
+
+  d="$(build_project)"; apply_add "$d" "myapp" none
+  git -C "$d/proj" init -q --bare "$d/proj/.myapp-origin.git"
+  LAST_OUT="$(python3 "$VERIFY" added myapp --root "$d/proj" 2>&1)"; LAST_RC=$?
+  check "${pfx}an unignored local bare origin is caught" \
+    "$([[ $LAST_RC -eq 1 ]] && grep -q 'FAIL the local bare origin is ignored' <<<"$LAST_OUT" && echo 1 || echo 0)" \
+    "unignored, git add -A absorbs the project's objects — secrets included — into the install"
+  printf '/.myapp-origin.git/\n' >> "$d/proj/.gitignore"
+  LAST_OUT="$(python3 "$VERIFY" added myapp --root "$d/proj" 2>&1)"; LAST_RC=$?
+  check "${pfx}...and accepted once ignored" "$([[ $LAST_RC -eq 0 ]] && echo 1 || echo 0)"
+  rm -rf "$d"
+
+  d="$(build_project)"; apply_add "$d" "MyApp" none 2>/dev/null
+  LAST_OUT="$(python3 "$VERIFY" added Hooks --root "$d/proj" 2>&1)"
+  check "${pfx}a management-territory name is caught case-insensitively" \
+    "$(grep -q 'FAIL the name is not management territory' <<<"$LAST_OUT" && echo 1 || echo 0)" \
+    "Hooks vs hooks — one directory on a case-insensitive filesystem"
+  rm -rf "$d"
+
+  section "${pfx}D. WHY the guarantee — demonstrated, not asserted"
+  # These two do not check verify_project at all. They exercise git itself, because the reasons
+  # behind the two hardest-to-argue rules are the thing a future reader needs in order to judge
+  # whether the rules can be relaxed. "It would review-fail" sounds relaxable. "It commits into
+  # your installation" does not.
+  d="$(build_project)"
+  git -C "$d/proj" add -A >/dev/null 2>&1
+  git -C "$d/proj" "${GIT_ID[@]}" commit -q -m base >/dev/null 2>&1
+  mkdir -p "$d/proj/notarepo"; echo wip > "$d/proj/unrelated-wip.txt"
+  local head_before head_after
+  head_before="$(git -C "$d/proj" rev-parse --abbrev-ref HEAD)"
+  git -C "$d/proj/notarepo" checkout -b feature/task-1 >/dev/null 2>&1
+  head_after="$(git -C "$d/proj" rev-parse --abbrev-ref HEAD)"
+  check "${pfx}a non-repo project MOVES THE ENCLOSING repo's HEAD" \
+    "$([[ "$head_before" != "$head_after" ]] && echo 1 || echo 0)" \
+    "$head_before -> $head_after — that is the user's agent-team installation, not the project"
+  git -C "$d/proj/notarepo" add -A >/dev/null 2>&1
+  check "${pfx}...and stages unrelated in-flight work from elsewhere in the tree" \
+    "$(git -C "$d/proj" diff --cached --name-only 2>/dev/null | grep -q 'unrelated-wip.txt' && echo 1 || echo 0)" \
+    "several sessions share this working tree; this is why the push job never auto-commits"
+  rm -rf "$d"
+
+  d="$(mktemp -d)"; mkdir -p "$d/adopted"
+  printf 'def f():\n    return 1\n' > "$d/adopted/app.py"
+  git -C "$d/adopted" init -q -b main
+  git -C "$d/adopted" "${GIT_ID[@]}" commit -q --allow-empty -m "empty baseline"
+  printf 'def f():\n    return 2\n' > "$d/adopted/app.py"
+  check "${pfx}an --allow-empty baseline yields an EMPTY diff after a real edit" \
+    "$([[ -z "$(git -C "$d/adopted" diff -- . 2>/dev/null)" ]] && echo 1 || echo 0)" \
+    "pre-existing files stay untracked and git diff cannot see them — the review ring reads nothing"
+  git -C "$d/adopted" add -A >/dev/null 2>&1
+  git -C "$d/adopted" "${GIT_ID[@]}" commit -q -m tracked
+  printf 'def f():\n    return 3\n' > "$d/adopted/app.py"
+  check "${pfx}...while a TRACKED baseline yields a real diff for the same edit" \
+    "$([[ -n "$(git -C "$d/adopted" diff -- . 2>/dev/null)" ]] && echo 1 || echo 0)" \
+    "this is why adopt commits content, with a secret scan in front of it"
+  rm -rf "$d"
+
   section "${pfx}C. an unparseable roster is exit 2, not a quiet invariant failure"
   d="$(build_project)"; apply_add "$d" "myapp" none
   printf '{ broken' > "$d/proj/standup/team.json"
@@ -285,10 +435,18 @@ self_test() {
     # the case stayed green and the fixture proved nothing. Fourth time in this project that a
     # mutation has silently no-opped — the self-test is what keeps catching it.
     "gitignore|if want not in lines and name not in lines and (\"%s/\" % name) not in lines:|if False:|missing .gitignore line is caught"
-    "gitlink|elif any(p == name or p.startswith(name + \"/\") for p in links):|elif False:|...and the verifier reports the gitlink too"
+    "gitlink|if hit:|if False:|...and the verifier reports the gitlink too"
     "folder|if wrong:|if False:|a wrong developer folder is caught"
     "clone|if not os.path.isdir(proj):|if False:|a failed clone is caught"
-    "nogit|elif not os.path.isdir(os.path.join(proj, \".git\")):|elif False:|a directory that is not a git repo is caught"
+    "toplevel|if not own_root:|if False:|a directory that is not a git repo is caught"
+    "unborn|elif not has_commit:|elif False:|a repo with an unborn HEAD is caught"
+    "noorigin|if not has_origin(proj):|if False:|a repo with no origin is caught"
+    "symlink|elif os.path.islink(proj):|elif False:|a symlinked project directory is caught"
+    "denylist|elif name.lower() in {o.lower() for o in owned}:|elif False:|a management-territory name is caught (derived, not transcribed)"
+    "mode120000|DANGEROUS_MODES = {\"160000\": \"gitlink (embedded repo)\", \"120000\": \"symlink blob\"}|DANGEROUS_MODES = {\"160000\": \"gitlink (embedded repo)\"}|a staged symlink blob (120000) is caught"
+    "kindnone|if kind != \"none\" and not str(surface.get(\"inspect\") or \"\").strip():|if not str(surface.get(\"inspect\") or \"\").strip():|kind none with no inspect is ACCEPTED"
+    "denylist-exact|elif name.lower() in {o.lower() for o in owned}:|elif name in owned:|a management-territory name is caught case-insensitively"
+    "bareorigin|if rc_ign != 0:|if False:|an unignored local bare origin is caught"
     "badpair|if unpaired:|if False:|a pair that resolves to nobody is caught"
     "badkind|if kind not in SURFACE_KINDS:|if False:|an unknown review_surface.kind is caught (--kind webb)"
     "squad-gone|if any(t.get(\"id\") == name for t in roster.get(\"teams\", [])):|if False:|a squad still in the roster is caught by the REMOVED check"
@@ -299,31 +457,78 @@ self_test() {
     "inspect|if kind != \"none\" and not str(surface.get(\"inspect\") or \"\").strip():|if False:|blank inspect is caught (kind alone is not enough)"
     "pair|if len(devs) < 2:|if False:|a LONE developer is caught (no fresh-context critic)"
   )
+  local rc=0
+  # BASELINE GATE. Every mutation verdict below is "did this case go RED" — which is meaningless
+  # for a case that was already red. Measured: a broken new case failed unmutated AND was scored
+  # "correctly went RED". Establish green first, or the whole self-test is unfalsifiable.
+  if ! bash "$0" >/dev/null 2>&1; then
+    printf '!! SELF-TEST ABORTED — the unmutated suite is not green.\n' >&2
+    printf '   Every check below asks "did this case go red"; a case that is already red answers\n' >&2
+    printf '   yes for the wrong reason. Fix the baseline first, then re-run.\n' >&2
+    return 3
+  fi
   printf '=== --self-test: neutralise ONE checker branch at a time ===\n'
-  local d rc=0 m name from to want out
+  # Run the mutations CONCURRENTLY. Each one re-runs the whole case suite (~7s) against its own
+  # mutated copy of the checker, in its own mktemp dir, touching nothing shared — so they are
+  # independent by construction. Serially this is ~2 minutes and growing with every branch added,
+  # which is how a judge stops being run. Coverage is unchanged: every mutation still executes the
+  # full suite and is still required to redden its OWN named case.
+  local jobdir; jobdir="$(mktemp -d)"
+  local m name from to want i=0
   for m in "${muts[@]}"; do
     IFS='|' read -r name from to want <<<"$m"
-    d="$(mktemp -d)"
     grep -qF "$from" "$VERIFY" || die_judge "self-test anchor not found in verify_project.py: $from
       Re-anchor it or delete the fixture — a mutation that silently no-ops reads as a pass."
-    python3 - "$VERIFY" "$d/mutated.py" "$from" "$to" <<'PY'
+    (
+      d="$(mktemp -d)"
+      python3 - "$VERIFY" "$d/mutated.py" "$from" "$to" <<'PY'
 import sys
 src = open(sys.argv[1], encoding="utf-8").read()
 assert sys.argv[3] in src
 open(sys.argv[2], "w", encoding="utf-8").write(src.replace(sys.argv[3], sys.argv[4], 1))
 PY
-    fails=0; FAILED_NAMES=""
-    out="$(STANDUP_VERIFY_PROJECT="$d/mutated.py" bash "$0" 2>&1)"
-    if grep -qF "  $want → FAIL" <<<"$out"; then
-      printf '  %-46s → correctly went RED\n' "$name"
+      out="$(STANDUP_VERIFY_PROJECT="$d/mutated.py" bash "$0" 2>&1)"
+      if grep -qF "  $want → FAIL" <<<"$out"; then
+        printf 'RED %s\n' "$name" > "$jobdir/$i"
+      else
+        { printf 'GREEN %s\n' "$name"; printf '   want red: %s\n' "$want"; } > "$jobdir/$i"
+      fi
+      rm -rf "$d"
+    ) &
+    i=$((i + 1))
+  done
+  wait
+
+  # EVERY job must have left a verdict. The serial version computed each verdict inline, so a
+  # mutation could not go missing; this one iterates over the files that EXIST, which is intent
+  # rather than fact. Measured: kill one subshell before it writes and the run printed 17 verdicts,
+  # claimed 18, and exited 0 — on a 2-core CI runner with 18 concurrent git-heavy jobs, a job dying
+  # is both the likeliest failure and the least visible one.
+  local collected; collected="$(ls "$jobdir" 2>/dev/null | wc -l | tr -d ' ')"
+  if [[ "$collected" -ne "${#muts[@]}" ]]; then
+    printf '\n!! SELF-TEST FAILED — %s of %s mutation job(s) reported back.\n' \
+      "$collected" "${#muts[@]}" >&2
+    printf '   A job that dies before writing its verdict is invisible to the collector, so the\n' >&2
+    printf '   missing branch would read as covered. Re-run; if it persists, run serially.\n' >&2
+    rm -rf "$jobdir"
+    return 3
+  fi
+
+  local f verdict
+  for f in $(ls "$jobdir" | sort -n); do
+    verdict="$(head -1 "$jobdir/$f")"
+    if [[ "$verdict" == RED\ * ]]; then
+      printf '  %-46s → correctly went RED\n' "${verdict#RED }"
     else
-      printf '  %-46s → ERROR  its own case stayed green\n' "$name" >&2
-      printf '      want red: %s\n' "$want" >&2
+      printf '  %-46s → ERROR  its own case stayed green\n' "${verdict#GREEN }" >&2
+      tail -n +2 "$jobdir/$f" >&2
       rc=3
     fi
-    rm -rf "$d"
   done
-  [[ $rc -eq 0 ]] && printf '\n--self-test → PASS  (%d checker branch(es) neutralised; each drove its OWN named case red)\n' "${#muts[@]}"
+  rm -rf "$jobdir"
+
+  # Prints what was COLLECTED, not what was intended — the two differing is the bug above.
+  [[ $rc -eq 0 ]] && printf '\n--self-test → PASS  (%s checker branch(es) neutralised; each drove its OWN named case red)\n' "$collected"
   return $rc
 }
 

@@ -1,17 +1,42 @@
 ---
 name: add-project
-description: Clone a git repo into this team project and point a new squad at it — the one command that turns a fresh install into a team working on YOUR code. Use when the user wants to add a project, add a repo, point the team at their own code, work on a real repository, or onboard a codebase.
+description: Point a squad at a project — clone a git repo, start a new empty one, or adopt a folder you already put here. The one command that turns a fresh install into a team working on YOUR code. Use when the user wants to add a project, add a repo, start a new project, adopt an existing folder, point the team at their own code, or onboard a codebase.
 allowedTools: Read, Bash, Edit
 ---
 
 Clone a repo into this team project and give it a squad. Do it now; don't just describe it.
 
-INPUT: `$ARGUMENTS` — `<git-url> [name] [--kind K] [--inspect CMD]`
+INPUT: `$ARGUMENTS` — one of three modes:
 
-- `name` defaults to the repo's basename (`git@host:org/thing.git` → `thing`). It becomes the
-  directory under this project root **and** the squad's `folder`.
+```
+/add-project clone <git-url> [name] [--kind K] [--inspect CMD]   # bring a repo in
+/add-project new   <name>          [--kind K] [--inspect CMD]    # start from nothing
+/add-project adopt <name>          [--kind K] [--inspect CMD]    # a folder already here
+/add-project <git-url> [name] …                                  # shorthand for clone
+```
+
+- `name` is the directory under this project root, the squad id, **and** the prefix of the two
+  developer ids (`-` and `.` become `_`, so `my-app` gives `my_app_a` / `my_app_b`). For `clone` it
+  defaults to the repo's basename. It must be free in all three namespaces.
 - `--kind` is the product surface: `web` `report` `agent` `api` `cli` `none`.
 - `--inspect` is the ONE command a stranger runs to actually SEE that surface.
+
+**Resolving the shorthand.** The bare form is `clone` **only** when the first token is a URL:
+`scheme://…`, or an `scp`-like `user@host:path`. Everything else is a refusal, not a guess:
+
+- a lone `clone` / `new` / `adopt` with nothing after it → print usage. (Otherwise
+  `/add-project adopt` reads as a complete command, and a directory genuinely named `adopt`
+  becomes unexpressible.)
+- anything starting `./`, `../` or `/` is a path, never a URL.
+- `^[A-Za-z]:` is excluded **before** the `scp`-like test — `C:\src\thing` is a Windows path, and
+  the `host:path` rule would otherwise read `C` as a host. That rule matches ONLY a single-letter
+  drive prefix; `file:///…` and `localhost:3000/x` are handled elsewhere — `file://` by the
+  scheme test (it is a URL, and a URL naming a local path is still a clone source you must be
+  explicit about), `localhost:3000/x` by requiring a `user@` before `host:path`.
+- anything else with no mode word → **refuse** and print the three forms.
+
+Guessing a mode is how you clone into a directory the user meant to adopt. This repo's rule is
+refuse rather than guess; a lexical URL test is not a guess, an "it looks like a directory" test is.
 
 **This replaces four manual edits** (clone, roster entry, `review_surface`, `.gitignore`) that
 previously had to be done by hand and in the right order. Three of the four were documented; the
@@ -46,36 +71,145 @@ Then, depending on where you are running:
 Say plainly which flag was missing and that nothing was changed. Do not clone first and ask after —
 a half-added project is worse than none, because the next command sees a directory with no squad.
 
-## Step 1 — clone
+## Step 1 — get the directory there, and make it a repo
 
-Resolve `ROOT` = the directory holding `standup/team.json` (this project root). Then, **in this
-order** — the existence test comes FIRST, and it is not optional:
+Resolve `ROOT` = the directory holding `standup/team.json` (this project root).
+
+**Every mode ends in the same state: `<ROOT>/<name>` is its OWN git repo, with at least one
+commit, and with an `origin`.** That is not tidiness — see "Why the guarantee" below.
+
+### 1a. Refuse before you touch anything
+
+Common to all modes, checked in this order:
+
+- `name` is a management path. Derive the list from `hooks/supervisor_gate.py`
+  (`PLUGIN_DIRS` ∪ `STANDUP_ALLOW_DIRS` ∪ `STANDUP_ALLOW_FILES`) — **do not transcribe it**; a
+  hand-written copy in an earlier draft already omitted `hooks/` and `skills/`.
+- `name` collides with an existing squad id **case-insensitively**. macOS and Windows default to
+  case-insensitive filesystems, so `MyApp` and `myapp` are one directory; an exact comparison lets
+  the second one through and you get two squads sharing a folder.
+- `name` contains a space, `/`, or a leading `-`.
+- The target is a **symlink** → refuse. `/name/` in `.gitignore` will not match it (trailing-slash
+  patterns are directory-only, and git does not treat a symlink-to-directory as a directory), so
+  `git add -A` stages it as mode `120000` — a blob holding a path out of the tree. Ask the user to
+  move or copy the real directory in.
+- The target's realpath is outside `ROOT`, or is `ROOT` itself (`adopt .`).
+- The target is already covered by a parent `.gitignore` rule — the append in step 4 would look
+  like it worked while the directory stayed invisible to git.
+
+### 1b. Per mode
+
+**clone** — `[ -e "$ROOT/<name>" ]` → refuse (see below); then
+`git -C "$ROOT" clone <git-url> <name>`. Git is not a backstop here: cloning into an existing
+**empty** directory succeeds. If the clone fails, report git's error verbatim and change nothing.
+
+**new** — create `<ROOT>/<name>`, write a one-line `README.md` (nothing else — every file you seed
+is a file the user has to delete, and a `.gitignore` invented for a stack you have not seen will be
+wrong), `git init`, `git add README.md`, commit.
+
+**adopt** — the directory is already there. Do these in order and **stop at the first refusal**:
+
+1. If it is already its own repo with commits, leave its contents and its `origin` completely
+   alone. Skip to 1c.
+2. **Ensure the dangerous paths are ignored — do not make this conditional on a `.gitignore`
+   existing.** For each of `.env`, `.env.*`, `*.pem`, `id_rsa`, `node_modules/`, `.venv/`,
+   `__pycache__/` that is actually present, make sure a matching line is in the directory's
+   `.gitignore`, appending to whatever is already there. Only lines for things you can see — do
+   not invent entries for a stack you are guessing at.
+
+   The earlier "if the directory has no `.gitignore`, write one" was the wrong condition: a stale
+   `*.pyc` from years ago skipped the whole step, and the baseline commit then contained `.env`.
+   Measured end to end.
+3. **Refuse on anything secret-shaped, by NAME first.** A filename test is the reliable signal
+   here: if `.env`, `.env.*`, `*.pem`, `id_rsa`, `id_dsa`, `*.p12`, `*.keystore` or
+   `credentials.json` would be committed, **refuse** and list them.
+
+   Then also run the plugin's scanner over the file contents
+   (`PYTHONPATH="$ROOT/standup/portal" python3 -c "from parsers import guardrails; …"`, walking the
+   tree, skipping `.git`, `node_modules`, `.venv`, `__pycache__`) and refuse on a hit.
+
+   **Content matching alone is not enough and must not be relied on.** Measured against the
+   scanner: `DB_PASSWORD=hunter2`, `API_KEY=abcdef123456`, `DATABASE_URL=postgres://u:s3cr3t@…`
+   and even `PASSWORD="hunter2"` are all MISSED; only prefixed tokens (`AKIA…`, `ghp_…`) are
+   caught. Unquoted `KEY=value` is the normal shape of a real dotenv file, which is exactly the
+   file an adopted folder is most likely to carry. The name test is what actually stops it.
+   (Speed is not the constraint: ~20,000 files/s, so a 3,600-file tree costs about 0.17s.)
+4. `git init` if needed, `git add -A`, commit.
+
+**Why a real baseline commit and not `git commit --allow-empty`.** An empty baseline leaves every
+pre-existing file untracked, and `git diff` cannot see untracked files — so when a developer edits
+the user's existing source, the review ring reads an **empty diff** and fails the work for a reason
+that has nothing to do with it. Measured: with an empty baseline a real edit produces `[]`; with a
+tracked baseline the same edit produces a normal diff. The empty-baseline shortcut trades the
+secret problem for the exact defect this guarantee exists to prevent.
+
+**Author identity.** Check `git config user.email` **explicitly** before committing; if it is
+empty, **refuse** and print the two `git config` lines. Do not invent one, and do not rely on
+git's own error: git only says `Author identity unknown` when it cannot GUESS one, and on a machine
+with a resolvable FQDN it silently invents `user@host` and commits. The refusal would never fire
+where it matters most. The bundled sample is initialised with a
+`demo`/`demo@local` identity because it is a throwaway; attributing a commit in the user's own
+source to a fabricated author is a different decision, and not ours.
+
+### 1c. Origin
+
+`git -C "$ROOT/<name>" remote` — if there is no `origin`, create a local bare one and push:
 
 ```
-[ -e "$ROOT/<name>" ] && { echo "refusing: $ROOT/<name> already exists"; exit 1; }
-git -C "$ROOT" clone <git-url> <name>
+git init --bare "$ROOT/.<name>-origin.git"
+git -C "$ROOT/<name>" remote add origin "$ROOT/.<name>-origin.git"
+git -C "$ROOT/<name>" push -u origin HEAD
 ```
 
-Git is **not** a backstop for the collision case: cloning into an existing EMPTY directory
-succeeds (exit 0), so you would silently adopt whatever was there. And when it does refuse, it
-says `fatal: destination path 'x' already exists and is not an empty directory` — which names
-neither `name`'s double role (it is the directory AND the squad id) nor the way out. Refuse first,
-and say:
+Then **ignore it** — append `/.<name>-origin.git/` to the ROOT `.gitignore` in step 4, alongside
+`/<name>/`. A bare origin is neither covered by `/<name>/` nor a pointer entry; it is ordinary
+files, so an unignored one lets `git add -A` in the installation absorb the project's entire git
+object store. Measured: 23 staged paths, and a loose object that decompressed to
+`DB_PASSWORD=hunter2`. That is worse than the gitlink this command was built to prevent — a gitlink
+is a dangling pointer, this is the content itself, and it travels when the user pushes their own
+agent-team repo.
+
+Offline, no network, no account. **This is not optional and it is not cosmetic:** the portal's
+code-task flow — the approve-then-commit loop that is this plugin's headline feature — resolves
+origin's default branch to build its worktree, and returns a hard error without one. Shipping
+`new` and `adopt` without this would leave two of the three modes silently unable to use it.
+
+**If the repo already has an `origin`, do not touch it.** A dead origin still resolves locally and
+fails honestly later; re-pointing someone's remote is not this command's business.
+
+### The collision refusal, in full
+
+`clone` and `new` both refuse an existing `<ROOT>/<name>`; `adopt` requires one. Say it like this —
+git's own `fatal: destination path 'x' already exists` names neither `name`'s triple role nor the
+way out:
 
 ```
 refusing: <ROOT>/<name> already exists — nothing was changed.
-  field  the squad id and the directory name are the SAME string
-  fix    pick another:  /add-project <git-url> <name>2 --kind <K> --inspect "<CMD>"
+  field  the directory name, the squad id and the developer-id prefix are the SAME string
+  fix    adopt it instead:  /add-project adopt <name> --kind <K> --inspect "<CMD>"
+         or pick another:   /add-project clone <git-url> <name>2 --kind <K> --inspect "<CMD>"
          or, if a previous attempt left it:  /remove-project <name>
-         then remove the directory yourself:  rm -rf "<ROOT>/<name>"
+                                             then  rm -rf "<ROOT>/<name>"
 ```
 
-**If the clone itself fails, stop.** Report git's own error verbatim — not a paraphrase — and
-change nothing else.
+### Why the guarantee — repo + baseline commit + origin
 
-Confirm the clone has an `origin` remote (`git -C "$ROOT/<name>" remote -v`). The gated SDLC commits
-to feature branches and never pushes, but the portal's worktree flow resolves `origin/<default>`,
-so a repo with no origin will fail later at a confusing place.
+Not a preference. Measured, in the shape that actually occurs:
+
+- **A project directory that is not its own repo is worse than useless — it is destructive.** In a
+  cloned agent-team install the plugin root *is* a git repo, so `git -C <project> …` resolves to
+  **the enclosing repo**. `git -C <non-repo project> checkout -b feature/task-1` moves **your
+  installation's HEAD**, and `git add -A` stages unrelated in-flight work from elsewhere in the
+  tree. Several sessions share this working tree; that is why the push job never auto-commits.
+  A run against a non-repo project does not quietly produce nothing — it commits into your setup.
+- **`git -C` does not save you.** Outside any repo it is loud — `diff` exits **129** (it falls
+  through to `--no-index` usage), and `status`/`rev-parse`/`add`/`checkout` exit **128**. Inside a
+  parent repo the same `diff` exits **0 with empty output** — the silent shape. Measured on git
+  2.55.0; the number differs by subcommand, so do not restate one code for all of them.
+- **A repo with no commit is the same failure by another route.** Untracked files are invisible to
+  `git diff`, so the review ring reads an empty diff no matter what changed.
+- **No origin disables the portal's code-task loop** (`worktree.py` resolves origin's default
+  branch and hard-errors without it).
 
 ## Step 2 — the review surface, and why it is not optional
 
@@ -95,6 +229,16 @@ deliberate: a squad with no declared surface is a team nobody can check the outp
 
 Do not guess `inspect` from the repo's README. If you cannot get a real one, use `kind: none` and
 say so in the summary.
+
+**For `new`, `kind: none` is the honest default and you must omit `inspect` entirely** — not
+`"inspect": ""`, not a placeholder. A brand-new empty project has no surface, and nothing validates
+`inspect` when kind is `none`, so an invented value would pass every check and stay wrong forever.
+
+Write the reason into `how`, and write the TRUE one rather than "revisit this later": the engine
+escalates on its own. `standup.workflow.js`'s `_touchedFrontend` turns on **both** `DESIGN_LENS`
+and `VISUAL_DQ` the moment a diff touches `frontend|web|ui|client|static|templates` or
+`.jsx/.tsx/.vue/.svelte/.html/.css` — regardless of what the squad declared. A `new` project is
+gated the instant it grows a UI, whether or not anyone came back to update this field.
 
 ## Step 3 — the roster entry
 
@@ -128,7 +272,8 @@ say so loudly. A roster that does not parse stops every command in this plugin.
 
 ## Step 4 — `.gitignore`
 
-Append `/<name>/` to this project's `.gitignore`.
+Append `/<name>/` to this project's `.gitignore` — and `/.<name>-origin.git/` too if step 1c
+created a local bare origin.
 
 Not cosmetic: the cloned repo is a git repo **inside** this one, and without the ignore a
 `git add -A` here records it as a gitlink (mode `160000`) — a pointer to a commit nobody else can
@@ -157,11 +302,16 @@ Added my-app
   repo     /Users/you/agent-team/my-app  (origin: git@github.com:you/my-app.git)
   squad    my-app — developers my_app_a, my_app_b
   surface  cli — inspect: cd my-app && pytest -q
-  ignored  /my-app/ added to .gitignore
+  ignored  /my-app/ and /.my-app-origin.git/ added to .gitignore
+  wrote    my-app/.gitignore  (+.env, +node_modules/) — we found those in your project
 
 Then:  /work "<task>"   one task through the gated SDLC
        /standup         the whole roster
 ```
+
+**If you wrote or extended a `.gitignore` inside the user's project, say so on its own line and
+name the entries you added and why.** We put a file in their repository; they should learn that
+here, not from `git log`. That line is part of the summary, not an extra.
 
 Keep the summary to those lines. The rules above (why `inspect` must terminate, why an invented one
 is worse than `none`) belong in this document, not repeated in every run's output — a reader who
