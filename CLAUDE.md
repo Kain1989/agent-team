@@ -44,7 +44,8 @@ folder string can be interpolated into a prompt, but a prompt cannot govern a ho
 torn down at the end; read-only ticks skip it), and a failed arm **stops the run** rather than
 burning a full pipeline on a guaranteed empty diff. For a hand-driven session, manage it with
 `standup/control/team_run_flag.sh` (`status` / `set <run-id>` / `clear <run-id>`) — it appends
-rather than overwrites, and refuses to clear while another run still holds the exemption. The
+rather than overwrites, and `clear` releases only YOUR record: while another run still holds one
+it keeps the file and exits non-zero, and it unlinks only when the last record goes. The
 6h TTL — not `clear` — is the real backstop, since a crashed run never reaches its teardown.
 
 ## How to run the team

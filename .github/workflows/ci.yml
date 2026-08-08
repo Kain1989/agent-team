@@ -68,11 +68,18 @@ jobs:
         # not a judge (E-03). Several of these caught a real defect in their own logic the first
         # time they were pointed at the tree; the two project judges had theirs found in review
         # instead, which is recorded as a known gap in CHANGELOG 0.4.0.
+        # test_run_flag_clear.sh is arm_path's other half: the exemption also has to be GIVEN BACK.
+        # `clear` refused whenever any other run held a record and had no per-record delete, so in
+        # any tree that had seen two overlapping runs it could never succeed again and --force —
+        # which unlinks the flag under whatever is still running — was the only way out. Its
+        # --self-test runs a pinned PRE-FIX copy of `clear` and requires the cases to reproduce that.
         run: |
           bash standup/control/tests/test_eval_resolver.sh --self-test
           bash standup/control/tests/test_eval_resolver.sh
           bash standup/control/tests/test_arm_path.sh --self-test
           bash standup/control/tests/test_arm_path.sh
+          bash standup/control/tests/test_run_flag_clear.sh --self-test
+          bash standup/control/tests/test_run_flag_clear.sh
           bash standup/control/tests/test_add_project.sh --self-test
           bash standup/control/tests/test_add_project.sh
           bash standup/control/tests/test_remove_project.sh --self-test

@@ -456,6 +456,7 @@ node standup/control/verify_design_quality.js --self-test                 # the 
 node standup/control/check_workflow_parse.js standup/standup.workflow.js  # the engine still loads
 node standup/control/tests/test_sdlc_routing.js                           # both entry paths still reach intake
 bash standup/control/tests/test_arm_path.sh                              # the exemption is armed in THIS install, not a neighbour
+bash standup/control/tests/test_run_flag_clear.sh                        # ...and can be given back in a tree with concurrent runs
 bash standup/control/tests/test_eval_resolver.sh                         # /eval says which cases it skipped, and why
 bash standup/control/tests/test_add_project.sh                          # /add-project's four invariants are checkable
 bash standup/control/tests/test_remove_project.sh                       # /remove-project edits surgically and keeps your code

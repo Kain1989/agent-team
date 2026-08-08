@@ -171,11 +171,15 @@ force-kills an agent mid-turn; a switch thrown during a turn lands at the next b
   that by luck, so this one replays the suite across the day under POSIX `TZ` strings. A suite that
   is red 40 minutes a day is worse than one that is red always: always-red gets fixed on the first
   run, and sometimes-red teaches a new reader that failures are normal.
+- **`test_run_flag_clear.sh`** — new, and the other half of `test_arm_path.sh`: the exemption has to
+  be given back as well as taken. Its `--self-test` runs a pinned pre-`0.5.2` copy of `clear` and
+  requires the cases to reproduce the defect that shipped, rather than a mutation invented for the
+  occasion.
 - **`contract.frontend.test.js`** — the only test that actually *executes* `static/app.js` was
   referenced by nothing, not CI and not the README, while three source-text judges were added around
   the same file. It is wired into both now.
 
-All three are in the README `Tests` list and in CI, which run the same set.
+All four are in the README `Tests` list and in CI, which run the same set.
 
 ### Fixed — `team_run_flag.sh clear` was unreachable in a tree with concurrent runs
 
