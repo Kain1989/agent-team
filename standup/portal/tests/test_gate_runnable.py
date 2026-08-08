@@ -473,6 +473,73 @@ def test_interpreter_check_does_not_cry_wolf(tmp_path, command):
     assert gate_check._interpreter_problem(resolved) == "", resolved
 
 
+# --------------------------------------------------------------------------------------- #
+# THE OTHER DIRECTION: arguments that carry a separator and name no file.
+#
+# `looks_like_path` accepts a `~` prefix and then tested the RAW token, so `os.path.exists`
+# was asked about a literal directory named `~`, which is never there. A `~` argument could
+# therefore never pass — reported missing while the real path sat on disk. A URL and a glob
+# are the same mistake from the other end: both carry `os.sep` while naming nothing, and both
+# started being flagged when the path test stopped requiring a `.py` suffix.
+#
+# Cry-wolf is not the harmless half of a checker. A false BROKEN refuses to launch a WORKING
+# gate, so it stops the queue — and this repo has already thrown one checker away for exactly
+# that. Today no shipped config carries such an argument, which is the only reason this was
+# not red: a hole nobody has stepped in yet is still a hole.
+# --------------------------------------------------------------------------------------- #
+_NON_PATH_ARGUMENTS = {
+    "home": "--data ~/artifacts",                 # expands to a real directory
+    "url": "--endpoint https://example.com/x",    # a separator, but not a path
+    "glob": "--exclude artifacts/*.json",         # matches files; is not one
+}
+
+
+def _hook_with_arguments(tmp_path, monkeypatch, *shapes):
+    """A healthy hook command carrying each named argument shape.
+
+    HOME is repointed at `tmp_path`, so the `~` case is decided by a directory this test
+    created rather than by whatever the developer's home happens to contain.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "artifacts").mkdir(exist_ok=True)
+    extras = " ".join(_NON_PATH_ARGUMENTS[s] for s in shapes)
+    return f"{_healthy_command(tmp_path)} {extras}"
+
+
+@pytest.mark.parametrize("shape", list(_NON_PATH_ARGUMENTS))
+def test_non_path_arguments_are_not_reported_missing(tmp_path, monkeypatch, shape):
+    command = _hook_with_arguments(tmp_path, monkeypatch, shape)
+    assert gate_check._interpreter_problem(command) == "", command
+
+
+def test_a_gate_carrying_all_three_shapes_is_certified_healthy(tmp_path, monkeypatch):
+    """End to end, not just the static half — the whole config must come back clean."""
+    command = _hook_with_arguments(tmp_path, monkeypatch, *_NON_PATH_ARGUMENTS)
+    assert gate_config_problems(_write_gate(tmp_path, command)) == []
+
+
+@pytest.mark.parametrize("shape,restore_pre_fix", [
+    # `~` was tested unexpanded...
+    ("home", lambda mp: mp.setattr(gate_check, "_resolves", os.path.exists)),
+    # ...and neither exclusion existed, so a separator alone was enough to convict.
+    ("url", lambda mp: mp.setattr(gate_check, "_URL_MARKER", "\x00")),
+    ("glob", lambda mp: mp.setattr(gate_check, "_GLOB_CHARS", "")),
+])
+def test_non_path_argument_check_rejects_each_pre_fix_rule(tmp_path, monkeypatch, shape,
+                                                           restore_pre_fix):
+    """E-03, once per shape: restore each pre-fix rule and that shape must be flagged again.
+
+    Three separate mutations rather than one, for the reason the stale-name checks next door
+    are also split: a single mutation that reddens the check leaves the other two assertions
+    unproven, and an assertion nobody has watched fail is decoration.
+    """
+    command = _hook_with_arguments(tmp_path, monkeypatch, shape)
+    restore_pre_fix(monkeypatch)
+    problem = gate_check._interpreter_problem(command)
+    assert "hook script does not exist" in problem, (
+        f"the pre-fix rule for {shape!r} flagged nothing, so the case above proves nothing")
+
+
 def test_missing_catchall_matcher_is_rejected(tmp_path):
     """Without '*' the hook only fires for the matchers listed — the rest are ungated."""
     gate = _write_gate(tmp_path, _healthy_command(tmp_path), matcher="mcp__.*")

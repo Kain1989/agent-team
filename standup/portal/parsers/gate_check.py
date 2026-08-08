@@ -230,6 +230,13 @@ def _smoke_problem(command: str) -> str:
 # FILE at all, and any positional after them belongs to the program, not to the interpreter.
 _NO_SCRIPT_FLAGS = frozenset({"-c", "-m"})
 
+# Tokens that contain `os.sep` while naming nothing on this filesystem, so reading them as
+# paths is pure cry-wolf: a URL (`https://host/x`) and a glob (`logs/*.json`). A glob's
+# METACHARACTERS are the signal, not the slash — `[` included, since a character class is a
+# glob too.
+_URL_MARKER = "://"
+_GLOB_CHARS = "*?["
+
 # What makes a BARE token a filename. Deliberately narrow: a dot followed by a letter and at
 # most seven more alphanumerics, anchored at the end. `hook.py`/`gate.sh`/`hook.mjs` match;
 # `run`, `python3`, `1.5` and `v1.2.3` do not — which is what keeps a wrapper's SUBCOMMAND
@@ -242,9 +249,32 @@ _NO_SCRIPT_FLAGS = frozenset({"-c", "-m"})
 _FILE_SUFFIX = re.compile(r"\.[A-Za-z][A-Za-z0-9]{0,7}$")
 
 
+def _resolves(arg: str) -> bool:
+    """Does `arg` name something that exists? `~` is expanded FIRST.
+
+    Without the expansion this asked `os.path.exists` about a literal directory named `~`,
+    which is never there — so every `~`-prefixed argument was reported missing while the real
+    path was sitting on disk. A checker that flags a working config is the failure mode this
+    module's own comments warn about; it gets switched off, and then it catches nothing.
+    """
+    return os.path.exists(os.path.expanduser(arg))
+
+
 def _looks_like_a_path(arg: str) -> bool:
     """Path-SHAPED: carries a separator, or an explicit relative/home prefix."""
     return (os.sep in arg) or arg.startswith(("./", "../", "~"))
+
+
+def _cannot_be_a_path(arg: str) -> bool:
+    """True for tokens that name no single file however they are shaped.
+
+    Whitespace is here because `shlex` has already split: a token that still contains a space
+    is quoted prose or an embedded shell command (`bash -lc 'exec python /x/hook.py'`), never
+    one path to test.
+    """
+    return (_URL_MARKER in arg
+            or any(c in arg for c in _GLOB_CHARS)
+            or any(c.isspace() for c in arg))
 
 
 def _missing_path(arg: str) -> str:
@@ -319,10 +349,10 @@ def _interpreter_problem(command: str) -> str:
     #     flags take values (`-u` does not, `--root` does), so only PATH-SHAPED tokens are
     #     tested, and a missing one is still a broken config whatever position it sits in.
     #
-    # Excluded from both roles: flags, and the token after `-c`/`-m` (source or a module name).
-    # `-c`/`-m` also settle the question of where the script is — there isn't one. A token that
-    # still contains whitespace after `shlex` is quoted prose or an embedded shell command
-    # (`bash -lc 'exec python /x/hook.py'`), never one path to test.
+    # Excluded from both roles, because they carry a separator while naming nothing: URLs,
+    # globs, and tokens that still contain whitespace after `shlex` (see `_cannot_be_a_path`).
+    # Flags are skipped, and the token after `-c`/`-m` is source or a module name — skipped,
+    # and it also settles the question of where the script is: there isn't one.
     script_found = False
     skip_next = False
     for arg in argv[1:]:
@@ -334,15 +364,15 @@ def _interpreter_problem(command: str) -> str:
                 skip_next = True
                 script_found = True  # `-c`/`-m`: the program is not a file; stop looking
             continue
-        if any(c.isspace() for c in arg):
+        if _cannot_be_a_path(arg):
             continue
         if not script_found:
             if _looks_like_a_path(arg) or _FILE_SUFFIX.search(arg):
                 script_found = True
-                if not os.path.exists(arg):
+                if not _resolves(arg):
                     return _missing_path(arg)
             continue
-        if _looks_like_a_path(arg) and not os.path.exists(arg):
+        if _looks_like_a_path(arg) and not _resolves(arg):
             return _missing_path(arg)
     return ""
 
