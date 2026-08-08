@@ -2,8 +2,9 @@
 """PreToolUse hook (L3) — the HARD backstop for supervisor mode (AGGRESSIVE).
 
 The Engineering Manager PRODUCES NOTHING. Every project / deliverable under the team
-root — the demo app, the Mission Control portal, evals, research reports, any code — is
-DONE BY THE TEAM through the gated SDLC (/work, /team, /standup, or the Workflow). The EM
+root — the repos you added with /add-project, the Mission Control portal, evals, research
+reports, any code — is DONE BY THE TEAM through the gated SDLC (/work, /team, /standup, or
+the Workflow). The EM
 directly touches ONLY the management / orchestration / governance primitives needed to
 RUN the team. This hook mechanically enforces exactly that, with one narrow audited hatch.
 

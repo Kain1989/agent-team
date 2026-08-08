@@ -5,8 +5,8 @@ An AI engineering team you clone and run from Claude Code, on your own machine.
 You get a paired-squad roster, a pipeline that plans, tests and reviews its own work behind
 gates before it commits, and a local Mission Control portal to watch it in the browser. Beyond
 Claude Code itself it needs no third-party service account and none of your credentials: the
-team, the portal and the sample project it works on all live on your machine. You are the
-approval gate for anything irreversible.
+team, the portal and the code it works on all live on your machine. You are the approval gate
+for anything irreversible.
 
 ## Run it
 
@@ -15,15 +15,24 @@ approval gate for anything irreversible.
    session, open this folder.
 3. Type `/portal`. The first run installs dependencies, then starts Mission Control; open
    the URL it prints (http://127.0.0.1:8770).
-4. Type `/standup`, or just say *run the agent team*. The board, the squads and each
+4. Type `/standup`, or just say *run the agent team*. **On a fresh checkout it stops right
+   here, deliberately** — before it spawns a single agent. The roster ships with no squads, so
+   there is no developer to dispatch and no board to build; it prints a three-line block saying
+   the roster contains no ACTIVE developer and naming `/add-project` as the fix. Give it a
+   project (next paragraph) and the same command runs the full board: the squads and each
    developer's progress update live in the portal while the top task goes through the gates.
 
-**That runs the team on the bundled sample.** To put it on YOUR code, install this as a plugin
-(below) and run `/agent-team:add-project <git-url>` — see [Point it at your repo](#point-it-at-your-repo).
+**There is no bundled sample.** The team works on code you point it at and nothing else — that
+is why step 4 stops rather than doing something with a toy. Point it somewhere with
+`/agent-team:add-project <git-url>` (also `new <name>` for an empty project, `adopt <name>` for
+a folder already here) — see [Point it at your repo](#point-it-at-your-repo).
+
 Worth knowing before you pick a path: in a checkout you opened directly, **only `/standup` and
-`/portal` work**, because they are the two files in `.claude/commands/`. Every other command in this
-README — `add-project` included — needs the plugin installed, and is namespaced `/agent-team:…`
-there. The quick start above and the headline feature are on two different install paths.
+`/portal` work**, because they are the two files in `.claude/commands/`. Every other command in
+this README — `add-project` included — needs the plugin installed, and is namespaced
+`/agent-team:…` there. So the quick start above and the command that unsticks its step 4 are on
+two different install paths: read [Install as a plugin](#install-as-a-plugin) before you decide
+which one you are on.
 
 Prerequisites: Claude Code with the Workflow tool and sub-agents (that is what runs the
 squad); Python 3.9+, `git`, and the `claude` CLI on `PATH` (the portal's code-task worker
@@ -177,7 +186,7 @@ Set up and verify:
 
 | command | what it does |
 |---|---|
-| `/init` | scaffold a team project into the current directory — engine, starter roster, sample app |
+| `/init` | scaffold a team project into the current directory — the engine and a starter roster; no sample project, you add your own |
 | `/add-project <git-url> [name] [--kind K] [--inspect CMD]` | clone your repo in and give it a squad — the one command that points the team at your own code. `name` defaults to the repo basename and is also how you resolve a collision |
 | `/remove-project <name>` | remove a project's squad from the roster (never deletes your code) |
 | `/eval` | run the regression suite in `evals/cases.json` and score pass or fail |

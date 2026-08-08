@@ -147,9 +147,8 @@ secret problem for the exact defect this guarantee exists to prevent.
 empty, **refuse** and print the two `git config` lines. Do not invent one, and do not rely on
 git's own error: git only says `Author identity unknown` when it cannot GUESS one, and on a machine
 with a resolvable FQDN it silently invents `user@host` and commits. The refusal would never fire
-where it matters most. The bundled sample is initialised with a
-`demo`/`demo@local` identity because it is a throwaway; attributing a commit in the user's own
-source to a fabricated author is a different decision, and not ours.
+where it matters most. Attributing a commit in the user's own source to a fabricated author is not
+a call this command gets to make — so it stops and asks, rather than picking a placeholder.
 
 ### 1c. Origin
 
