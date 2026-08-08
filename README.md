@@ -157,13 +157,13 @@ Run the team:
 | `/work <task>` | one named task, end to end through the same pipeline |
 | `/team <task>` | run the roster as a Claude Code native agent team instead of through the Workflow tool |
 
-Watch it and control spend:
+Watch it:
 
 | command | what it does |
 |---|---|
 | `/portal` | start Mission Control — the status board plus the code-task approval queue |
 | `/runs` | run history — jobs and ticks with status, cost, duration, denied tools, commits |
-| `/costs` | spend today against the daily cap; set the cap, or throw the kill switch |
+| `/costs` | spend today against the daily cap; set the cap, or throw the kill switch — for **portal jobs**, which is not the same thing as a `/standup` run ([What it costs](#what-it-costs)) |
 
 Shape the roster:
 
@@ -194,6 +194,83 @@ Set up and verify:
 
 That table is every entry in `skills/`; nothing is omitted. (Counting them here would be one
 more number to rot — `ls skills/` is authoritative.)
+
+---
+
+## What it costs
+
+This is an expensive way to write software, and the reason is the same as the reason it catches
+what it catches. Do not read the gates as overhead around the work: **they are most of the work.**
+One task through the pipeline is sixteen agent turns, and exactly one of them writes code —
+
+> arm · intake · intake review · investigate · plan · plan challenge · **implement** ·
+> test gate · test-gate honesty review · four review lenses (design-quality · pair ·
+> correctness · conventions-and-tests) · commit · final review · disarm
+
+— and six of those points can refuse and end the run before it commits, which is the same six
+[What a run does](#what-a-run-does) names above. A returned intake contract or a rejected plan adds
+up to four more turns (`intake revise` / `recheck`, `replan` / `rechallenge`). The count comes from
+the `label:` on each `agent(...)` call in
+[`standup/standup.workflow.js`](standup/standup.workflow.js) — read them and you can check it.
+Nothing here is a benchmark: this repo quotes no dollar figure because it ships no run records to
+derive one from (`standup/control/runs/` is empty by design; yours go there).
+
+`/standup` puts a roster poll in front of that, and the poll scales with the roster: **one turn per
+active developer, one per squad, one per design lead, one for the board, and one per active staff
+lens.** For a one-squad / two-developer / three-staff roster that is eight turns before any code is
+considered, so a `/standup` that works one task is twenty-four turns against `/work`'s sixteen.
+
+### The levers that actually reduce it
+
+**Name the task.** `/work <task>` skips the six roster-wide phases — Comms, Standup, Team Sync,
+Design, Synthesize, Staff Pulse, every one of them guarded on `SINGLE` in the engine — and runs the
+identical gated pipeline on the one thing you asked for. When you already know what you want done,
+the roster poll is spend that exists to discover it.
+
+**Take fewer tasks per tick.** Each additional board item is another fourteen turns: the whole
+pipeline except the once-per-run arm and disarm. Note the direction, though — both shipped
+`/standup` entry points already pass `maxTasks: 1`, so this is a knob you can only turn *up*. The
+engine's default of `2` applies to a caller that omits the argument.
+
+**Run the board without the build.** Omit `work` and you get the poll, the design pass and the
+board with no Work phase at all — eight turns on the roster above. Useful for "what should we do
+today" without paying to do it. Not reachable through `/standup`, which passes `work: true`; call
+the Workflow tool directly.
+
+**Switch roles off rather than deleting them.** `active: false` on a developer or a staff role
+removes its turn from every tick (`standup/team.json`). This is already how `comms_triage` ships,
+which is why Comms costs nothing on a fresh install.
+
+**Run the cadence less often, or not at all.** `/daily-standup [hours]` writes
+`standup/control/schedule.json`, and every scheduled tick is a full `/standup`. Four ticks a day is
+four times one tick a day. `/stop-daily-standup` turns it off at runtime.
+
+**Do not pass `design: true`.** It switches the design pass from a three-to-five-surface rotation to
+a sweep of every surface. No shipped command passes it, so unless you added it yourself you are
+already on the cheap path.
+
+### What will not save you money, whatever it looks like
+
+**`/costs` is a ceiling, not a discount — and it is around a different thing.** The daily cap and
+the kill switch are enforced in the portal's job worker, at the one place `costs.claim_gate()` is
+called (`standup/portal/parsers/jobworker.py`). `/standup` and `/work` do not go through the worker;
+they run in your session through the Workflow tool, and the engine never consults the budget. So a
+cap will not stop the run that spends the most. Use it for portal code tasks, and use the levers
+above for the pipeline.
+
+**There is no knob that runs fewer review lenses.** The review ring is derived from the task, never
+from an argument: pair review, plus two fresh-context lenses, plus a design-quality lens unless the
+squad declared `--kind none` *and* the diff left rendering alone. That declaration is the one thing
+that removes a lens — it drops design-quality and takes one turn off the task — and every lens then
+left standing is an engineering-correctness lens, which is precisely the hole the fourth one was
+added to close ([The gates](#the-gates)). `none` has to be true of your product. It is not a budget
+setting, and using it as one buys a discount by turning the answer to "is this any good" into
+nobody's job.
+
+**Model and effort tiers are not user knobs here.** The engine assigns effort per kind of thinking
+and leaves the model inheriting the session's, in constants at the top of the file with a note
+saying not to tune them by intuition. Changing them means editing the engine, and the cheap thing
+to get wrong is downgrading a judgment step, which costs less per run and more per mistake.
 
 ---
 
