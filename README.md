@@ -163,7 +163,7 @@ Watch it:
 |---|---|
 | `/portal` | start Mission Control — the status board plus the code-task approval queue |
 | `/runs` | run history — jobs and ticks with status, cost, duration, denied tools, commits |
-| `/costs` | spend today against the daily cap; set the cap, or throw the kill switch — for **portal jobs**, which is not the same thing as a `/standup` run ([What it costs](#what-it-costs)) |
+| `/costs` | spend today against the daily cap; set the cap, or throw the kill switch. The cap reaches **portal jobs**; the kill switch reaches portal jobs **and** `/team`. Neither reaches `/standup` or `/work` ([What it costs](#what-it-costs)) |
 
 Shape the roster:
 
@@ -207,9 +207,12 @@ One task through the pipeline is sixteen agent turns, and exactly one of them wr
 > test gate · test-gate honesty review · four review lenses (design-quality · pair ·
 > correctness · conventions-and-tests) · commit · final review · disarm
 
-— and six of those points can refuse and end the run before it commits, which is the same six
-[What a run does](#what-a-run-does) names above. A returned intake contract or a rejected plan adds
-up to four more turns (`intake revise` / `recheck`, `replan` / `rechallenge`). The count comes from
+— and six of those points can refuse, the same six [What a run does](#what-a-run-does) names above.
+Five of them refuse before anything is committed. The sixth, the supervisor's final read, runs
+*after* the commit agent and judges the commit itself — the order is there in the list — so a task
+it rejects is marked `supervisor-rejected` with its commit still sitting on the feature branch,
+not unmade. A returned intake contract or a rejected plan adds up to four more turns
+(`intake revise` / `recheck`, `replan` / `rechallenge`). The count comes from
 the `label:` on each `agent(...)` call in
 [`standup/standup.workflow.js`](standup/standup.workflow.js) — read them and you can check it.
 Nothing here is a benchmark: this repo quotes no dollar figure because it ships no run records to
@@ -251,12 +254,22 @@ already on the cheap path.
 
 ### What will not save you money, whatever it looks like
 
-**`/costs` is a ceiling, not a discount — and it is around a different thing.** The daily cap and
-the kill switch are enforced in the portal's job worker, at the one place `costs.claim_gate()` is
-called (`standup/portal/parsers/jobworker.py`). `/standup` and `/work` do not go through the worker;
-they run in your session through the Workflow tool, and the engine never consults the budget. So a
-cap will not stop the run that spends the most. Use it for portal code tasks, and use the levers
-above for the pipeline.
+**`/costs` is a ceiling, not a discount — and its two halves do not reach the same distance.** The
+**daily cap** is enforced in exactly one place: `costs.claim_gate()`, called from the portal's job
+worker (`standup/portal/parsers/jobworker.py`). No other code reads `budget.json`. The **kill
+switch** is read there too, and in two more places that never go near `claim_gate()` — the
+native-team lifecycle hooks wired in [`hooks/hooks.json`](hooks/hooks.json), where `TaskCreated`
+refuses to create new teammate work and `TeammateIdle` stops a teammate instead of letting it idle.
+So the kill switch does hard-stop a `/team` run and the cap does not, because that lifecycle
+exposes no per-task cost to compare a cap against.
+
+**Neither reaches `/standup` or `/work`, and that is the part worth knowing.** Those run in your
+session through the Workflow tool, and the engine consults neither control: `kill_switch` does not
+appear in [`standup/standup.workflow.js`](standup/standup.workflow.js) at all, and `budget` appears
+only in a comment. So the control you are most likely to reach for does not stop the run that
+spends the most — use the levers above for that. All three enforcement points also stop work at a
+boundary (a new job claim, a new task, a teammate going idle) rather than aborting a turn already
+in flight.
 
 **There is no knob that runs fewer review lenses.** The review ring is derived from the task, never
 from an argument: pair review, plus two fresh-context lenses, plus a design-quality lens unless the
