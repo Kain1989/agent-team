@@ -68,6 +68,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -225,6 +226,34 @@ def _smoke_problem(command: str) -> str:
     return ""
 
 
+# `-c` takes python SOURCE and `-m` takes a MODULE NAME. Both mean the command has no script
+# FILE at all, and any positional after them belongs to the program, not to the interpreter.
+_NO_SCRIPT_FLAGS = frozenset({"-c", "-m"})
+
+# What makes a BARE token a filename. Deliberately narrow: a dot followed by a letter and at
+# most seven more alphanumerics, anchored at the end. `hook.py`/`gate.sh`/`hook.mjs` match;
+# `run`, `python3`, `1.5` and `v1.2.3` do not — which is what keeps a wrapper's SUBCOMMAND
+# from being mistaken for the script (see the scan below).
+#
+# This is NOT a return to `arg.endswith(".py")`. That test was the ONLY signal and was applied
+# to EVERY argument, so it certified a missing `hook.sh` as fine. Here a suffix is one of two
+# signals (a separator is the other) and it is consulted for ONE argument — the interpreter's
+# script — where the alternative is not "check less" but "guess".
+_FILE_SUFFIX = re.compile(r"\.[A-Za-z][A-Za-z0-9]{0,7}$")
+
+
+def _looks_like_a_path(arg: str) -> bool:
+    """Path-SHAPED: carries a separator, or an explicit relative/home prefix."""
+    return (os.sep in arg) or arg.startswith(("./", "../", "~"))
+
+
+def _missing_path(arg: str) -> str:
+    return (
+        f"hook script does not exist: {arg!r} — Claude Code FAILS OPEN on an "
+        f"unlaunchable hook, so this gate would silently allow every tool"
+    )
+
+
 def _interpreter_problem(command: str) -> str:
     """Return a problem string if `command`'s executable cannot be run, else "".
 
@@ -259,36 +288,62 @@ def _interpreter_problem(command: str) -> str:
     # The hook script itself must exist too — a valid interpreter pointed at a
     # missing script also produces a non-zero exit and the same silent fail-open.
     #
-    # This used to read `arg.endswith(".py")`, which certified a config naming a missing
-    # `hook.sh`, `hook.js` or extensionless hook as having no path problem. The outcome was
-    # still fail-CLOSED — the smoke run below catches it — but only as "hook EXITS 2" or an
-    # exit 127, which sends the reader looking at the hook's logic instead of at the path
-    # that does not exist. A precise reason before launch is the whole value of this
-    # function; the extension was never what made an argument a path.
+    # TWO ROLES, not one rule. The arguments after the interpreter are not a uniform list:
+    # everything up to and including the SCRIPT belongs to the interpreter, everything after
+    # it belongs to the hook. They need different tests, and collapsing them is what put a
+    # hole in this check twice.
     #
-    # POLICY, stated rather than inferred: ANY path-shaped argument that names nothing is a
-    # broken config, whatever position it sits in. The alternative — guessing which argument
-    # is "the script" — needs a table of which flags take values (`-u` does not, `--root`
-    # does), and a wrong guess in either direction is worse than this rule: miss it and the
-    # reason stays hidden, over-reach and the lint cries wolf. Two narrow exclusions keep it
-    # from doing so here:
-    #   * `-`-prefixed tokens are flags, not paths;
-    #   * the token after `-c`/`-m` is python source or a module name — arbitrary text that
-    #     can contain a `/` — so it is skipped rather than read as a path.
+    #   * THE SCRIPT — the first token that could name a file. Checked whatever its shape,
+    #     because POSITION is a structural fact about how every interpreter parses its own
+    #     argv, while shape is a guess. Shape-only was the previous two bugs: first
+    #     `arg.endswith(".py")` (a missing `hook.sh` certified fine), then "must be
+    #     path-shaped", under which a BARE `hook.py` was never tested at all — and a bare
+    #     name is exactly what a hand-written config carries. The smoke run does not save
+    #     that case: with the script missing, CPython exits **2**, which `_smoke_problem`
+    #     accepts as the documented "the hook ran and blocked". Measured: a config naming a
+    #     missing bare `hook.py` came back with NO PROBLEMS — certified healthy, gate gone.
+    #
+    #     Tokens before the script that cannot name a file are stepped over rather than
+    #     consumed, so a wrapper launcher still resolves: `/usr/bin/env python3 /x/hook.py`
+    #     skips `python3` and tests `/x/hook.py`; `uv run hook.py` skips `run`. Taking the
+    #     first non-flag token unconditionally would have failed both — it would report
+    #     `python3` as a missing script and stop the queue on a working config, and a false
+    #     BROKEN is a denial of service.
+    #
+    #     KNOWN RESIDUAL, stated rather than discovered later: a script that is BOTH bare and
+    #     extensionless (`python gatehook`) is indistinguishable from a subcommand, so it is
+    #     not tested. Guessing there can only trade this module's fail-open for a fail-closed
+    #     on someone's working config.
+    #
+    #   * THE HOOK'S OWN ARGUMENTS — after the script. Here we genuinely cannot know which
+    #     flags take values (`-u` does not, `--root` does), so only PATH-SHAPED tokens are
+    #     tested, and a missing one is still a broken config whatever position it sits in.
+    #
+    # Excluded from both roles: flags, and the token after `-c`/`-m` (source or a module name).
+    # `-c`/`-m` also settle the question of where the script is — there isn't one. A token that
+    # still contains whitespace after `shlex` is quoted prose or an embedded shell command
+    # (`bash -lc 'exec python /x/hook.py'`), never one path to test.
+    script_found = False
     skip_next = False
     for arg in argv[1:]:
         if skip_next:
             skip_next = False
             continue
         if arg.startswith("-"):
-            skip_next = arg in ("-c", "-m")
+            if arg in _NO_SCRIPT_FLAGS:
+                skip_next = True
+                script_found = True  # `-c`/`-m`: the program is not a file; stop looking
             continue
-        looks_like_path = (os.sep in arg) or arg.startswith(("./", "../", "~"))
-        if looks_like_path and not any(c.isspace() for c in arg) and not os.path.exists(arg):
-            return (
-                f"hook script does not exist: {arg!r} — Claude Code FAILS OPEN on an "
-                f"unlaunchable hook, so this gate would silently allow every tool"
-            )
+        if any(c.isspace() for c in arg):
+            continue
+        if not script_found:
+            if _looks_like_a_path(arg) or _FILE_SUFFIX.search(arg):
+                script_found = True
+                if not os.path.exists(arg):
+                    return _missing_path(arg)
+            continue
+        if _looks_like_a_path(arg) and not os.path.exists(arg):
+            return _missing_path(arg)
     return ""
 
 
