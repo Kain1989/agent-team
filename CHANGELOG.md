@@ -176,7 +176,7 @@ force-kills an agent mid-turn; a switch thrown during a turn lands at the next b
   requires the cases to reproduce the defect that shipped, rather than a mutation invented for the
   occasion.
 - **`contract.frontend.test.js`** — the only test that actually *executes* `static/app.js` was
-  referenced by nothing, not CI and not the README, while three source-text judges were added around
+  referenced by nothing, not CI and not the README, while source-text judges were being added around
   the same file. It is wired into both now.
 
 All four are in the README `Tests` list and in CI, which run the same set.
