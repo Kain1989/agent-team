@@ -509,11 +509,14 @@ def _interpreter_problem(command: str) -> str:
     #           What is left is still SMOKE-run, and for most interpreters that is enough.
     #           Measured here, each handed one missing script:
     #
-    #               python 2 · perl 2 · node 1 · ruby 1 · bash 127 · sh 127 · zsh 127
+    #               python 2 · perl 2 · dash 2 · node 1 · ruby 1 · bash 127 · zsh 127
+    #               sh = whatever it links to (bash on macOS, dash on most Linux)
     #
-    #           Only the two that exit **2** fail open, because 2 is the documented "the hook
-    #           ran and blocked" — which is the same collision Finding A turned on. The rest
-    #           still fail closed, just with a less precise message than a named path.
+    #           Only the ones that exit **2** fail open, because 2 is the documented "the hook
+    #           ran and blocked" — the same collision Finding A turned on. The rest still fail
+    #           closed, just with a less precise message than a named path. `sh` is listed as a
+    #           link rather than a number because it is one: an earlier draft of this table
+    #           wrote `sh 127`, which is true on macOS and false on the platform CI runs on.
     #
     #   * THE HOOK'S OWN ARGUMENTS — after the script. Here we genuinely cannot know which
     #     flags take values (`-u` does not, `--root` does), so only PATH-SHAPED tokens are

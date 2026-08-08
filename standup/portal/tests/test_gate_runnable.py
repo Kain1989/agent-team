@@ -946,6 +946,120 @@ def test_home_relative_interpreter_check_rejects_the_unexpanded_rule(tmp_path, m
 
 
 # --------------------------------------------------------------------------------------- #
+# CHARACTERISATION: the two factual claims the KNOWN RESIDUAL comment makes.
+#
+# Every rule above has a test. The comment describing what those rules DELIBERATELY LET
+# THROUGH had none — so the fail-open could widen, or the exit codes it leans on could shift,
+# and the only thing that changed would be that the comment quietly became false. A comment
+# that documents a gap is load-bearing exactly as long as something checks it.
+#
+# These are characterisation tests, not requirements. If one fails because the gap got
+# NARROWER, that is good news: narrow the comment and this test together, in that order.
+# --------------------------------------------------------------------------------------- #
+_RESIDUAL_B_QUADRANTS = {
+    # (token naming nothing, is it reported?) — the token sits after a bare `--long-flag`
+    "path-shaped + suffixed": ("{root}/no/such/gate.py", True),
+    "path-shaped, no suffix": ("{root}/no/such/gatehook", False),
+    "bare + suffixed": ("gate.py", False),
+    "bare, no suffix": ("gatehook", False),
+}
+
+
+@pytest.mark.parametrize("quadrant", list(_RESIDUAL_B_QUADRANTS))
+def test_residual_b_is_exactly_one_reported_quadrant_of_four(tmp_path, monkeypatch, quadrant):
+    """Pins the WIDTH of rule 2's fail-open, which nothing else does.
+
+    The three open quadrants are the shapes a real flag value takes — `ts-node/register` is
+    path-shaped without a suffix, `.env` is bare with one, `requests` is bare without — so
+    each is open because closing it convicts a working command, not because nobody looked.
+    """
+    monkeypatch.chdir(tmp_path)
+    token, reported = _RESIDUAL_B_QUADRANTS[quadrant]
+    token = token.format(root=tmp_path)
+    assert not os.path.exists(token), "precondition: the token must name nothing"
+
+    command = f"{_fake_launcher(tmp_path, 'uv')} run --env-file {token}"
+    problem = gate_check._interpreter_problem(command)
+    if reported:
+        assert "hook script does not exist" in problem, problem
+    else:
+        assert problem == "", (
+            f"{quadrant!r} is now REPORTED — if that is an improvement, narrow the "
+            f"KNOWN RESIDUAL comment and this table together: {problem}")
+
+
+@pytest.mark.parametrize("code,accepted", [(1, False), (2, True), (3, False),
+                                           (126, False), (127, False)])
+def test_only_exit_2_is_accepted_among_the_nonzero_exits(tmp_path, code, accepted):
+    """The residual comment leans entirely on WHICH exit codes the smoke run forgives.
+
+    Exit 2 is accepted because it is Claude Code's documented "the hook ran and blocked" —
+    that collision is what let Finding A hide, and it is why the residual above is a residual
+    at all. If 1 or 127 ever started being forgiven too, the comment would silently become
+    wrong and every interpreter in its table would fail open. Nothing checked that until here.
+    """
+    script = tmp_path / f"exit{code}.sh"
+    script.write_text(f"#!/bin/bash\ncat >/dev/null\nexit {code}\n", encoding="utf-8")
+    script.chmod(0o755)
+    problems = gate_config_problems(_write_gate(tmp_path, str(script), name=f"e{code}.json"))
+    if accepted:
+        assert problems == [], f"exit {code} must be accepted as a real block: {problems}"
+    else:
+        assert any(f"EXITS {code}" in p for p in problems), (
+            f"exit {code} must not be certified healthy: {problems}")
+
+
+# The comment's table, verbatim. `sh` is absent on purpose: it is a LINK whose target differs
+# by platform, and an earlier draft of that table wrote `sh 127` — true on macOS, false on the
+# runner. It is asserted separately, as a link.
+_MISSING_SCRIPT_EXIT_CODES = {"python": 2, "perl": 2, "dash": 2,
+                              "node": 1, "ruby": 1, "bash": 127, "zsh": 127}
+
+
+def _interpreter_binary(name):
+    import sys
+    return sys.executable if name == "python" else shutil.which(name)
+
+
+@pytest.mark.parametrize("name", list(_MISSING_SCRIPT_EXIT_CODES))
+def test_the_exit_code_table_in_the_residual_comment_still_holds(tmp_path, name):
+    """Re-measures the numbers the comment prints, rather than trusting a transcription.
+
+    Which of these fail OPEN through the smoke run is decided entirely by whether they exit
+    2, so these numbers are not decoration — they are the reason residual (b) is described as
+    "mostly still caught". A silent upstream change to any of them changes that sentence.
+    """
+    binary = _interpreter_binary(name)
+    if not binary:
+        pytest.skip(f"{name} is not installed here")
+    proc = subprocess.run([binary, str(tmp_path / "__absent_script__")],
+                          capture_output=True, cwd=str(tmp_path))
+    assert proc.returncode == _MISSING_SCRIPT_EXIT_CODES[name], (
+        f"{name} now exits {proc.returncode} on a missing script, not "
+        f"{_MISSING_SCRIPT_EXIT_CODES[name]} — the residual comment's table is stale")
+
+
+def test_sh_is_a_link_and_the_table_says_so_rather_than_a_number():
+    """`sh` must behave as one of the two documented targets — never a third thing.
+
+    This is the assertion that would have caught `sh 127` being written as a fact: it is bash
+    here and dash on the runner, and those disagree on BOTH questions the module asks (PATH
+    search, and the exit code on a missing script).
+    """
+    import tempfile
+
+    sh = shutil.which("sh")
+    if not sh:
+        pytest.skip("sh is not installed here")
+    with tempfile.TemporaryDirectory() as tmp:
+        rc = subprocess.run([sh, os.path.join(tmp, "__absent__")],
+                            capture_output=True, cwd=tmp).returncode
+    assert rc in (127, 2), (
+        f"sh exits {rc} on a missing script — neither bash's 127 nor dash's 2, so the "
+        f"comment's 'whatever it links to' no longer covers this platform")
+
+
+# --------------------------------------------------------------------------------------- #
 # THE OTHER DIRECTION: arguments that carry a separator and name no file.
 #
 # `looks_like_path` accepts a `~` prefix and then tested the RAW token, so `os.path.exists`
