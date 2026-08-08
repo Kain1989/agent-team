@@ -370,6 +370,52 @@ def blob(rel):
     return p.stdout, None
 
 
+def masked(text):
+    """`text` with comment bodies and string CONTENTS blanked, character for character.
+
+    The result is the SAME LENGTH as the input, so an offset found in it indexes the original
+    unchanged — which is the whole point: the anchor and the bracket walk below need to see
+    code only, while `mock_staff_ids` still needs the real string contents to read the ids.
+
+    Both of those used to run on the raw region. The anchor `staff:\\s*\\[` therefore matched
+    inside COMMENTS — ordinary prose, in a file whose comments exist to explain the mock —
+    and the first match wins, so the judge walked a bracket pair in a sentence and reported
+    four MISSING staff. It went red, which is the right direction, but it named the wrong
+    file: the mock was intact and a comment was the defect. The bracket walk has the identical
+    exposure one layer down, where a lone `[` in a comment or a `note` string skews the depth.
+    """
+    out, i, n = list(text), 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "/" and i + 1 < n and text[i + 1] == "/":
+            j = text.find("\n", i)
+            j = n if j < 0 else j
+            out[i:j] = " " * (j - i)
+            i = j
+            continue
+        if c == "/" and i + 1 < n and text[i + 1] == "*":
+            j = text.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            out[i:j] = [" " if ch != "\n" else "\n" for ch in text[i:j]]
+            i = j
+            continue
+        if c in "\"'`":
+            j = i + 1
+            while j < n:
+                if text[j] == "\\":
+                    j += 2; continue
+                if text[j] == c:
+                    break
+                j += 1
+            end_of_body = min(j, n)
+            out[i + 1:end_of_body] = [" " if ch != "\n" else "\n"
+                                      for ch in text[i + 1:end_of_body]]
+            i = end_of_body + 1
+            continue
+        i += 1
+    return "".join(out)
+
+
 def mock_staff_ids(block):
     """Every `id:` value in `block`, skipping comments and string contents.
 
@@ -433,15 +479,16 @@ if start < 0 or end <= start:
           "page; repair the markers rather than deleting the check" % APPJS)
     raise SystemExit(0)
 region = app_src[start:end]
-m = re.search(r"(?<![A-Za-z0-9_$])staff:\s*\[", region)
+scan = masked(region)   # same length, so every offset below indexes `region` unchanged
+m = re.search(r"(?<![A-Za-z0-9_$])staff:\s*\[", scan)
 if not m:
     print("!!JUDGE the embedded mock in %s declares no staff[] — the judge cannot answer" % APPJS)
     raise SystemExit(0)
 open_at, depth, close_at = m.end() - 1, 0, -1
-for j in range(open_at, len(region)):
-    if region[j] == "[":
+for j in range(open_at, len(scan)):
+    if scan[j] == "[":
         depth += 1
-    elif region[j] == "]":
+    elif scan[j] == "]":
         depth -= 1
         if depth == 0:
             close_at = j
@@ -755,6 +802,50 @@ PY
     printf '  %-46s → correctly stayed GREEN\n' "mock-vs-user-added-staff-uncommitted"
   else
     printf '  %-46s → ERROR  a user running /add-role --staff was flagged\n' "mock-vs-user-added-staff-uncommitted" >&2
+    grep -A3 "equal the shipped roster's staff ids" <<<"$out" >&2
+    rc=3
+  fi
+  rm -rf "$d"
+
+  # D's JUDGE-integrity control. The two cases above prove D can go red for the right reasons; this
+  # one proves it cannot be aimed at the wrong text. A COMMENT mentioning `staff: [` — prose, in a
+  # file whose comments exist to explain the mock — used to out-anchor the real declaration, and the
+  # run then reported four MISSING staff. Red is the right direction and the wrong file: the mock
+  # was intact. A judge that fails loudly while blaming the wrong thing still sends the reader to
+  # the wrong place, which is the same cost as failing silently, paid later.
+  d="$(stage_root)"
+  python3 - "$d/standup/portal/static/app.js" <<'PY'
+import sys
+p = sys.argv[1]
+src = open(p, encoding="utf-8").read()
+anchor = "const MOCK_STATUS = {"
+assert anchor in src, "the mock block marker moved; this mutation needs updating"
+src = src.replace(anchor, anchor + "\n    // the roster's staff: [ ... ] is mirrored below", 1)
+open(p, "w", encoding="utf-8").write(src)
+PY
+  git -C "$d" -c user.name=judge -c user.email=judge@invalid commit -qam "explain the mock in a comment"
+  out="$(STANDUP_RELEASE_ROOT="$d" bash "$0" 2>&1)"
+  if grep -q "equal the shipped roster's staff ids → PASS" <<<"$out"; then
+    printf '  %-46s → correctly stayed GREEN\n' "comment-naming-staff-does-not-move-anchor"
+  else
+    printf '  %-46s → ERROR  a comment out-anchored the real staff[]\n' "comment-naming-staff-does-not-move-anchor" >&2
+    grep -A3 "equal the shipped roster's staff ids" <<<"$out" >&2
+    rc=3
+  fi
+
+  # ...and E-03 on that green, for the reason the summary control below is written: an assertion
+  # that something stayed GREEN is satisfied by a judge that says PASS to everything. A PRE-FIX
+  # copy — the anchor searched in the raw region, a ONE-token sed so the mutation cannot drift
+  # into rewriting the logic — judges the very same staged root and must report the mock as
+  # missing every staff role it in fact carries.
+  local raw_anchor_copy; raw_anchor_copy="$(mktemp -d)/judge_raw_anchor.sh"
+  sed 's/masked(region)/region/' "$0" > "$raw_anchor_copy"
+  out="$(STANDUP_RELEASE_REPO="$REPO" STANDUP_RELEASE_ROOT="$d" bash "$raw_anchor_copy" 2>&1)"
+  if grep -q "equal the shipped roster's staff ids → FAIL" <<<"$out" \
+     && grep -q "^ *MISSING " <<<"$out"; then
+    printf '  %-46s → the pre-fix copy still mis-anchors\n' "comment-anchor-prefix-copy-is-caught"
+  else
+    printf '  %-46s → ERROR  the green above proves nothing\n' "comment-anchor-prefix-copy-is-caught" >&2
     grep -A3 "equal the shipped roster's staff ids" <<<"$out" >&2
     rc=3
   fi

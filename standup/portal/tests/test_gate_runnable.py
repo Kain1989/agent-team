@@ -381,11 +381,78 @@ def test_missing_hook_script_is_named_whatever_its_extension(tmp_path, name):
     assert name in problem, problem
 
 
+# --------------------------------------------------------------------------------------- #
+# ...AND WHEREVER IT SITS: a BARE filename was checked by nothing at all.
+#
+# Two individually-correct rules met and left a hole between them. `looks_like_path` demanded a
+# separator or a `./ ../ ~` prefix, so a config naming a plain `hook.py` was never path-checked;
+# and the smoke run does not cover for it, because CPython exits **2** when it cannot open the
+# script and exit 2 is the documented "the hook ran and blocked". Measured on this file's own
+# helpers: a config naming a MISSING bare `hook.py` came back with NO PROBLEMS — certified
+# healthy, boundary gone. That is the exact direction this module exists to make impossible.
+#
+# The two halves live in ONE test deliberately. "The bare name goes red" is satisfiable by
+# simply refusing exit 2, which would redden every hook that blocks the way Claude Code
+# documents — so proving that half alone proves the wrong thing.
+# --------------------------------------------------------------------------------------- #
+BARE_MISSING = "__no_such_gate_hook__.py"
+
+
+def test_bare_missing_script_is_named_and_a_real_exit_2_block_still_passes(tmp_path):
+    import sys
+
+    assert not os.path.exists(BARE_MISSING), "precondition: the bare name must not resolve"
+
+    # HALF 1 — the fail-open. A bare filename naming nothing must be reported, and reported as
+    # the missing PATH: "EXITS 2" is the message that hid this, because it sends the reader to
+    # the hook's logic instead of to the file that is not there.
+    problems = gate_config_problems(
+        _write_gate(tmp_path, f"{sys.executable} {BARE_MISSING}", name="bare.json"))
+    assert problems, "a config naming a MISSING bare hook filename was certified healthy"
+    assert any("hook script does not exist" in p and BARE_MISSING in p for p in problems), problems
+    assert not any("EXITS 2" in p for p in problems), problems
+
+    # HALF 2 — the over-reach. Same interpreter, same exit code, script PRESENT: this hook ran
+    # and blocked, which is a supported answer and must stay green. The only difference between
+    # the two halves is whether the script is on disk, which is precisely the distinction the
+    # accepted exit code cannot make on its own.
+    blocker = tmp_path / "blocking_hook.py"
+    blocker.write_text(
+        "import sys\n"
+        "sys.stdin.read()\n"
+        "sys.stderr.write('blocked by policy\\n')\n"
+        "raise SystemExit(2)\n",
+        encoding="utf-8",
+    )
+    assert gate_config_problems(
+        _write_gate(tmp_path, f"{sys.executable} {blocker}", name="blocker.json")) == []
+
+
+def test_bare_script_check_rejects_the_shape_only_rule(tmp_path, monkeypatch):
+    """E-03 for the half above: restore the pre-fix rule and the lie must come back.
+
+    The old rule was "path-shaped or not a path at all", under which a bare filename is never a
+    candidate. Blanking the filename-suffix signal restores exactly that classification, and the
+    SAME config must then be certified healthy again — otherwise the assertion above is only
+    proving that this box happens to have no `__no_such_gate_hook__.py` lying around.
+    """
+    import sys
+
+    command = f"{sys.executable} {BARE_MISSING}"
+    monkeypatch.setattr(gate_check, "_FILE_SUFFIX", re.compile(r"(?!)"))  # matches nothing
+    assert gate_check._interpreter_problem(command) == "", (
+        "the mutation did not restore the pre-fix classification")
+    assert gate_config_problems(_write_gate(tmp_path, command, name="bare.json")) == [], (
+        "the pre-fix rule did not reproduce the fail-open, so the case above proves nothing")
+
+
 @pytest.mark.parametrize("command", [
     "{py} -c 'import sys; sys.stdout.write(\"/no/such/path\")'",   # code, not a path
     "{py} -m json.tool",                                           # a module, not a path
     "{py} -u {script}",                                            # a flag that takes no value
     "{py} {script} --verbose",                                     # a valueless flag after it
+    "{py} run {script}",            # a wrapper's SUBCOMMAND before the script (`uv run hook.py`)
+    "{py} python3 {script}",        # a nested INTERPRETER before it (`/usr/bin/env python3 …`)
 ])
 def test_interpreter_check_does_not_cry_wolf(tmp_path, command):
     """The other half: a checker that flags well-formed commands gets switched off.
@@ -393,12 +460,84 @@ def test_interpreter_check_does_not_cry_wolf(tmp_path, command):
     This repo threw away a backtick linter for exactly that once. `-c` and `-m` carry
     arbitrary text that can contain a `/`, so their values are skipped rather than read as
     paths.
+
+    The last two guard the rule above from the obvious over-correction. "The first non-flag
+    token is the script" would report `run` and `python3` as missing scripts and refuse to
+    launch a working gate — and a false BROKEN stops the queue, which is its own outage.
+    A token that cannot name a file is stepped over, not consumed.
     """
     import sys
     script = tmp_path / "hook.py"
     script.write_text(DECIDING_HOOK, encoding="utf-8")
     resolved = command.format(py=sys.executable, script=script)
     assert gate_check._interpreter_problem(resolved) == "", resolved
+
+
+# --------------------------------------------------------------------------------------- #
+# THE OTHER DIRECTION: arguments that carry a separator and name no file.
+#
+# `looks_like_path` accepts a `~` prefix and then tested the RAW token, so `os.path.exists`
+# was asked about a literal directory named `~`, which is never there. A `~` argument could
+# therefore never pass — reported missing while the real path sat on disk. A URL and a glob
+# are the same mistake from the other end: both carry `os.sep` while naming nothing, and both
+# started being flagged when the path test stopped requiring a `.py` suffix.
+#
+# Cry-wolf is not the harmless half of a checker. A false BROKEN refuses to launch a WORKING
+# gate, so it stops the queue — and this repo has already thrown one checker away for exactly
+# that. Today no shipped config carries such an argument, which is the only reason this was
+# not red: a hole nobody has stepped in yet is still a hole.
+# --------------------------------------------------------------------------------------- #
+_NON_PATH_ARGUMENTS = {
+    "home": "--data ~/artifacts",                 # expands to a real directory
+    "url": "--endpoint https://example.com/x",    # a separator, but not a path
+    "glob": "--exclude artifacts/*.json",         # matches files; is not one
+}
+
+
+def _hook_with_arguments(tmp_path, monkeypatch, *shapes):
+    """A healthy hook command carrying each named argument shape.
+
+    HOME is repointed at `tmp_path`, so the `~` case is decided by a directory this test
+    created rather than by whatever the developer's home happens to contain.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "artifacts").mkdir(exist_ok=True)
+    extras = " ".join(_NON_PATH_ARGUMENTS[s] for s in shapes)
+    return f"{_healthy_command(tmp_path)} {extras}"
+
+
+@pytest.mark.parametrize("shape", list(_NON_PATH_ARGUMENTS))
+def test_non_path_arguments_are_not_reported_missing(tmp_path, monkeypatch, shape):
+    command = _hook_with_arguments(tmp_path, monkeypatch, shape)
+    assert gate_check._interpreter_problem(command) == "", command
+
+
+def test_a_gate_carrying_all_three_shapes_is_certified_healthy(tmp_path, monkeypatch):
+    """End to end, not just the static half — the whole config must come back clean."""
+    command = _hook_with_arguments(tmp_path, monkeypatch, *_NON_PATH_ARGUMENTS)
+    assert gate_config_problems(_write_gate(tmp_path, command)) == []
+
+
+@pytest.mark.parametrize("shape,restore_pre_fix", [
+    # `~` was tested unexpanded...
+    ("home", lambda mp: mp.setattr(gate_check, "_resolves", os.path.exists)),
+    # ...and neither exclusion existed, so a separator alone was enough to convict.
+    ("url", lambda mp: mp.setattr(gate_check, "_URL_MARKER", "\x00")),
+    ("glob", lambda mp: mp.setattr(gate_check, "_GLOB_CHARS", "")),
+])
+def test_non_path_argument_check_rejects_each_pre_fix_rule(tmp_path, monkeypatch, shape,
+                                                           restore_pre_fix):
+    """E-03, once per shape: restore each pre-fix rule and that shape must be flagged again.
+
+    Three separate mutations rather than one, for the reason the stale-name checks next door
+    are also split: a single mutation that reddens the check leaves the other two assertions
+    unproven, and an assertion nobody has watched fail is decoration.
+    """
+    command = _hook_with_arguments(tmp_path, monkeypatch, shape)
+    restore_pre_fix(monkeypatch)
+    problem = gate_check._interpreter_problem(command)
+    assert "hook script does not exist" in problem, (
+        f"the pre-fix rule for {shape!r} flagged nothing, so the case above proves nothing")
 
 
 def test_missing_catchall_matcher_is_rejected(tmp_path):
