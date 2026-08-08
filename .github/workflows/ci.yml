@@ -24,6 +24,17 @@ jobs:
         working-directory: standup/portal
         run: python -m pytest -q
 
+      - name: Clock-independence judge
+        # The step above runs the portal suite ONCE, at whatever time the runner happens to start.
+        # tests/test_actions.py was red for ~40 min a day because guard()'s tick_imminent rule reads
+        # the real wall clock and the fixture never pinned it — a defect a single-clock run can only
+        # catch by luck, and CI's luck held for months. This replays that suite across the day under
+        # POSIX TZ strings. --self-test first: it removes the fixture's pin and requires the window
+        # cases to go red while the ordinary-clock cases stay green.
+        run: |
+          bash standup/control/tests/test_clock_independence.sh --self-test
+          bash standup/control/tests/test_clock_independence.sh
+
       - name: Frontend contract test
         # The ONLY test that EXECUTES static/app.js. It ran green for its whole life while
         # being referenced by nothing but its own header — not this file, not the README —

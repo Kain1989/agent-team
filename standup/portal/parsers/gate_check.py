@@ -303,6 +303,22 @@ _BARE_LONG_FLAG = re.compile(r"^--")
 _PATH_SEARCHING_INTERPRETER = frozenset({"bash"})
 
 
+def _is_path_searched(arg: str) -> bool:
+    """Would a PATH search even apply to `arg`? Only for a name with no separator.
+
+    This is bash's own rule, not a heuristic: a command name containing a slash is taken as a
+    path and never looked for on PATH. Without it, `_found_on_path` is asked a question it
+    answers misleadingly — `os.path.join(<pathdir>, "sub/hook.sh")` exists whenever the PATH
+    directory happens to contain a `sub/`, so the predicate says True while `bash sub/hook.sh`
+    exits 127. Measured, both halves, on a `sub/hook.sh` present only under a PATH entry.
+
+    Named rather than inlined for the reason a guard usually gets deleted: `os.sep not in arg`
+    sitting in the middle of a compound `if` reads like a redundant sanity check, and nothing
+    was defending it. See `test_the_path_exemption_never_applies_to_a_token_with_a_separator`.
+    """
+    return os.sep not in arg
+
+
 def _found_on_path(name: str) -> bool:
     """Would a PATH-searching shell find `name`? READABILITY, not the execute bit.
 
@@ -311,12 +327,33 @@ def _found_on_path(name: str) -> bool:
     predicate exists precisely to stop convicting commands that work. `which` is still right
     for argv[0], which really does have to be executable; this is a different question.
 
+    `R_OK` is the whole point and used to be missing: `os.path.isfile` alone is neither
+    readability nor executability, so it OVER-reported exactly where the docstring promised
+    care. Measured on this filesystem as a non-root user, `bash <name>` against a slash-less
+    script on PATH:
+
+        mode   bash runs it   isfile   isfile and R_OK   shutil.which
+        000    no             YES      no                no
+        111    no             YES      no                YES
+        444    yes            yes      yes               no
+        644    yes            yes      yes               no
+        755    yes            yes      yes               yes
+
+    `isfile and R_OK` is the only column that matches bash in every row — which is also the
+    evidence for the paragraph above, since `which` is wrong on three of the five.
+    Over-reporting was contained downstream by the smoke run, so this was a false claim before
+    it was a live defect. Docstring and body disagreed; the measurement says the DOCSTRING was
+    the right one, so the body moved to meet it rather than the other way round.
+
     Uses the same PATH `_probe_env` hands the smoke run, so the pre-check and the run cannot
     disagree. As with argv[0], the CHILD's PATH may differ from ours — an absolute path in
     the config remains strongly preferred.
     """
     for directory in (os.environ.get("PATH") or "").split(os.pathsep):
-        if directory and os.path.isfile(os.path.join(directory, name)):
+        if not directory:
+            continue
+        candidate = os.path.join(directory, name)
+        if os.path.isfile(candidate) and os.access(candidate, os.R_OK):
             return True
     return False
 
@@ -578,10 +615,10 @@ def _interpreter_problem(command: str) -> str:
             if claims_script:
                 script_found = True
                 # `bash gatehook` resolves through PATH, so "not on disk here" is not the
-                # same as "missing" for it. Guarded by the slash test because that is the
+                # same as "missing" for it. Guarded by the separator test because that is the
                 # condition bash itself applies — a name with a separator is never searched.
                 if (interp_name in _PATH_SEARCHING_INTERPRETER
-                        and os.sep not in arg and _found_on_path(arg)):
+                        and _is_path_searched(arg) and _found_on_path(arg)):
                     continue
                 if not _resolves(arg):
                     return _missing_path(arg)

@@ -59,6 +59,61 @@ def isolated(tmp_path, monkeypatch):
     import app as app_module
     importlib.reload(app_module)
 
+    # --- PIN THE TICK SCHEDULE: "no tick is imminent" is a FACT here, not an assumption.
+    #
+    # actions.guard() rule (4) refuses a launch when the next SCHEDULED tick is less than
+    # IMMINENT_TICK_S (600s) away. That is correct in production — it is what stops a portal
+    # launch racing cron into a double-fire — and it reads the real local WALL CLOCK, through
+    # liveness.next_tick() over the hardcoded 08:00 / 14:07 / 20:17 / 02:27 table.
+    #
+    # So every test below that asserts a launch is ACCEPTED was silently conditional on what
+    # time of day the suite happened to run. Inside any of those four windows it came back
+    # `409 tick_imminent` where the test expected 202, plus the knock-on
+    # `FileNotFoundError: control.log` — a SYMPTOM, not a second bug: the blocked POST never
+    # reached _append_log, so the file was never created.
+    #
+    # Measured on this tree with only TZ shifted and not one byte of source changed:
+    #     11:00, 16:30                    -> 30 passed
+    #     07:55, 13:59, 20:12, 02:22      -> 18 failed, 12 passed
+    # The 12 survivors are exactly the tests that assert a launch is BLOCKED. The gate was not
+    # flaky; it was stuck closed, for 4 x 600s = 40 minutes a day, in a suite the README tells
+    # people to run.
+    #
+    # The fix pins the ONE input that made this file clock-dependent. Deliberately NOT a frozen
+    # global clock: the TTL/expire and stuck-RUNNING watchdog tests build "N seconds ago" from a
+    # real now() against real ceilings (PENDING_TTL_S, MAX_TICK_S), and freezing datetime.now()
+    # breaks those boundaries. Pin the schedule, leave the clock alone.
+    #
+    # Two shortcuts were considered and rejected. Relaxing the assertions to "202 or 409" would
+    # leave 18 tests unable to tell "launch works" from "launch is completely broken". Making
+    # guard()'s clock injectable over HTTP would hand production a supported way to switch
+    # double-fire protection off; the now= parameters on guard()/launch() exist for callers
+    # inside this process and are reachable from no route.
+    #
+    # This does NOT blind rule (4) — it now has MORE coverage than the accident gave it:
+    #   * test_tick_imminent_blocks_negative_in_seconds injects `live` directly (no clock);
+    #   * test_imminent_window_is_exactly_bounded_against_the_real_tick_table composes the REAL
+    #     next_tick() with the REAL guard() at T-601/600/599/1s around every entry in
+    #     liveness.TICKS;
+    #   * test_tick_imminent_blocks_a_real_POST_at_the_http_layer re-pins this same seam to 180s
+    #     and requires a 409 through the full app.py path.
+    #
+    # `at` is None on purpose: what is being pinned is the INTERVAL, the only thing the guard
+    # decides on. Inventing a timestamp that contradicted it would be a worse fixture.
+    #
+    # SCOPE, stated honestly: this pins the SCHEDULE-computed next_tick. liveness.assess() will
+    # prefer a `next_tick` ISO string carried in heartbeat.json when one is present, and
+    # control/heartbeat.py writes one from the real clock. Today only the tests that run the
+    # real heartbeat.py subprocess take that path, and they assert a launch is BLOCKED via an
+    # EARLIER rule (the run lock), so none of them can flip. A future test that ran the real
+    # heartbeat.py AND asserted a launch is ALLOWED would reopen the dependency through that
+    # door — and control/tests/test_clock_independence.sh, which replays this whole file inside
+    # all four windows, is what would catch it.
+    monkeypatch.setattr(
+        liveness, "next_tick",
+        lambda now=None: {"name": "AFTERNOON", "at": None, "in_seconds": 6 * 3600},
+    )
+
     client = TestClient(app_module.app)
     yield app_module, client, root / "control"
 
@@ -444,6 +499,89 @@ def test_tick_imminent_blocks_negative_in_seconds(isolated):
     block = dict(live); block["next_tick"] = {"name": "X", "at": None, "in_seconds": actions.IMMINENT_TICK_S - 1}
     assert actions.guard(block)["ok"] is False
     assert actions.guard(block)["code"] == "tick_imminent"
+
+
+def test_imminent_window_is_exactly_bounded_against_the_real_tick_table():
+    """The window is EXACTLY [T-599s, T), for every tick in the real table.
+
+    The test above injects `in_seconds` by hand, so it proves the comparison and nothing
+    about the schedule that feeds it. This one composes the two REAL functions —
+    liveness.next_tick() over liveness.TICKS, then actions.guard() — with an explicit `now`,
+    so it reads no clock while still exercising the arithmetic that made the suite
+    time-of-day dependent in the first place.
+
+    Two off-by-ones live in that seam and both are pinned here. The comparison is `<`, so
+    in_seconds == IMMINENT_TICK_S is still SAFE; and in_seconds is `int()`-truncated, so
+    T-600.9s reports 600 and is allowed while T-599.9s reports 599 and blocks. The window is
+    therefore 600 seconds of wall time reported as the integers 599..0 — which is where
+    `4 x 600s = 40 minutes a day` comes from.
+
+    Takes no fixture on purpose: nothing here touches STANDUP_ROOT, and `isolated` monkeypatches
+    the very function under test.
+    """
+    from parsers import actions, liveness
+
+    assert actions.IMMINENT_TICK_S == 600, "the expectations below are written against 600s"
+    assert liveness.TICKS, "an empty tick table would make every case below vacuous"
+
+    base = datetime.datetime(2026, 6, 20)   # date is irrelevant; TICKS is time-of-day only
+    for name, hh, mm in liveness.TICKS:
+        tick = base.replace(hour=hh, minute=mm)
+        for offset, want_ok in ((601, True), (600, True), (599, False), (1, False)):
+            now = tick - datetime.timedelta(seconds=offset)
+            nt = liveness.next_tick(now=now)
+            assert nt["name"] == name and nt["in_seconds"] == offset, (
+                f"{name}: next_tick at T-{offset}s should be this tick, {offset}s out; got {nt}"
+            )
+            g = actions.guard(
+                {"busy": False, "dual_runner": False, "next_tick": nt}, now=now)
+            assert g["ok"] is want_ok, (
+                f"{name} at T-{offset}s: expected ok={want_ok}, got {g}"
+            )
+            if not want_ok:
+                assert g["code"] == "tick_imminent"
+                assert g["detail"]["firing"] is False, "not yet firing — still counting down"
+
+
+# --------------------------------------------------------------------------- #
+# (b2) tick_imminent blocks a REAL POST through the whole HTTP path.
+#
+# The rule used to be covered ONLY by the direct guard() calls above, with a hand-built
+# `live` dict — nothing proved it survives _assess_live -> actions.launch -> 409 body ->
+# no request file. It LOOKED covered because for ~40 min a day the real clock enforced it
+# by accident on every OTHER test in this file. That accident is what the `isolated`
+# fixture now pins away, and removing an accident has to be paid for with a deliberate
+# test or the rule quietly loses its HTTP coverage.
+# --------------------------------------------------------------------------- #
+def test_tick_imminent_blocks_a_real_POST_at_the_http_layer(isolated, monkeypatch):
+    """FAR from a tick a POST is accepted (202 — every launch test in this file); NEAR one
+    it is refused (409 — here). Same seam, opposite fact, both at the HTTP boundary."""
+    app_module, client, control = isolated
+    liveness = sys.modules["parsers.liveness"]
+    # 180s out: inside IMMINENT_TICK_S. Re-pins the seam the fixture set to 6h, so this test
+    # differs from the accepting ones by exactly one input.
+    monkeypatch.setattr(
+        liveness, "next_tick",
+        lambda now=None: {"name": "MORNING", "at": "2026-06-20T08:00:00", "in_seconds": 180},
+    )
+
+    r = client.post("/api/actions/run-standup")
+    assert r.status_code == 409, r.text
+    body = r.json()
+    assert body["queued"] is False
+    assert body["code"] == "tick_imminent"
+    # the operator-facing reason names the tick and states the CONSEQUENCE, not a generic "busy"
+    reason = body["reason"].lower()
+    assert "morning" in reason and "race" in reason and "double-fire" in reason, reason
+    assert body["detail"]["in_seconds"] == 180
+    assert body["detail"]["firing"] is False
+    # refused BEFORE any write: the queue must be untouched
+    assert len(list((control / "requests").glob("*.json"))) == 0
+
+    # the read-only pre-check the UI calls must agree with the POST it gates
+    g = client.get("/api/actions/guard").json()
+    assert g["ok"] is False
+    assert g["code"] == "tick_imminent"
 
 
 # --------------------------------------------------------------------------- #

@@ -5,8 +5,8 @@ An AI engineering team you clone and run from Claude Code, on your own machine.
 You get a paired-squad roster, a pipeline that plans, tests and reviews its own work behind
 gates before it commits, and a local Mission Control portal to watch it in the browser. Beyond
 Claude Code itself it needs no third-party service account and none of your credentials: the
-team, the portal and the sample project it works on all live on your machine. You are the
-approval gate for anything irreversible.
+team, the portal and the code it works on all live on your machine. You are the approval gate
+for anything irreversible.
 
 ## Run it
 
@@ -15,15 +15,24 @@ approval gate for anything irreversible.
    session, open this folder.
 3. Type `/portal`. The first run installs dependencies, then starts Mission Control; open
    the URL it prints (http://127.0.0.1:8770).
-4. Type `/standup`, or just say *run the agent team*. The board, the squads and each
+4. Type `/standup`, or just say *run the agent team*. **On a fresh checkout it stops right
+   here, deliberately** — before it spawns a single agent. The roster ships with no squads, so
+   there is no developer to dispatch and no board to build; it prints a three-line block saying
+   the roster contains no ACTIVE developer and naming `/add-project` as the fix. Give it a
+   project (next paragraph) and the same command runs the full board: the squads and each
    developer's progress update live in the portal while the top task goes through the gates.
 
-**That runs the team on the bundled sample.** To put it on YOUR code, install this as a plugin
-(below) and run `/agent-team:add-project <git-url>` — see [Point it at your repo](#point-it-at-your-repo).
+**There is no bundled sample.** The team works on code you point it at and nothing else — that
+is why step 4 stops rather than doing something with a toy. Point it somewhere with
+`/agent-team:add-project <git-url>` (also `new <name>` for an empty project, `adopt <name>` for
+a folder already here) — see [Point it at your repo](#point-it-at-your-repo).
+
 Worth knowing before you pick a path: in a checkout you opened directly, **only `/standup` and
-`/portal` work**, because they are the two files in `.claude/commands/`. Every other command in this
-README — `add-project` included — needs the plugin installed, and is namespaced `/agent-team:…`
-there. The quick start above and the headline feature are on two different install paths.
+`/portal` work**, because they are the two files in `.claude/commands/`. Every other command in
+this README — `add-project` included — needs the plugin installed, and is namespaced
+`/agent-team:…` there. So the quick start above and the command that unsticks its step 4 are on
+two different install paths: read [Install as a plugin](#install-as-a-plugin) before you decide
+which one you are on.
 
 Prerequisites: Claude Code with the Workflow tool and sub-agents (that is what runs the
 squad); Python 3.9+, `git`, and the `claude` CLI on `PATH` (the portal's code-task worker
@@ -148,13 +157,13 @@ Run the team:
 | `/work <task>` | one named task, end to end through the same pipeline |
 | `/team <task>` | run the roster as a Claude Code native agent team instead of through the Workflow tool |
 
-Watch it and control spend:
+Watch it:
 
 | command | what it does |
 |---|---|
 | `/portal` | start Mission Control — the status board plus the code-task approval queue |
 | `/runs` | run history — jobs and ticks with status, cost, duration, denied tools, commits |
-| `/costs` | spend today against the daily cap; set the cap, or throw the kill switch |
+| `/costs` | spend today against the daily cap; set the cap, or throw the kill switch. The cap reaches **portal jobs**; the kill switch reaches portal jobs **and** `/team`. Neither reaches `/standup` or `/work` ([What it costs](#what-it-costs)) |
 
 Shape the roster:
 
@@ -177,7 +186,7 @@ Set up and verify:
 
 | command | what it does |
 |---|---|
-| `/init` | scaffold a team project into the current directory — engine, starter roster, sample app |
+| `/init` | scaffold a team project into the current directory — the engine and a starter roster; no sample project, you add your own |
 | `/add-project <git-url> [name] [--kind K] [--inspect CMD]` | clone your repo in and give it a squad — the one command that points the team at your own code. `name` defaults to the repo basename and is also how you resolve a collision |
 | `/remove-project <name>` | remove a project's squad from the roster (never deletes your code) |
 | `/eval` | run the regression suite in `evals/cases.json` and score pass or fail |
@@ -185,6 +194,96 @@ Set up and verify:
 
 That table is every entry in `skills/`; nothing is omitted. (Counting them here would be one
 more number to rot — `ls skills/` is authoritative.)
+
+---
+
+## What it costs
+
+This is an expensive way to write software, and the reason is the same as the reason it catches
+what it catches. Do not read the gates as overhead around the work: **they are most of the work.**
+One task through the pipeline is sixteen agent turns, and exactly one of them writes code —
+
+> arm · intake · intake review · investigate · plan · plan challenge · **implement** ·
+> test gate · test-gate honesty review · four review lenses (design-quality · pair ·
+> correctness · conventions-and-tests) · commit · final review · disarm
+
+— and six of those points can refuse, the same six [What a run does](#what-a-run-does) names above.
+Five of them refuse before anything is committed. The sixth, the supervisor's final read, runs
+*after* the commit agent and judges the commit itself — the order is there in the list — so a task
+it rejects is marked `supervisor-rejected` with its commit still sitting on the feature branch,
+not unmade. A returned intake contract or a rejected plan adds up to four more turns
+(`intake revise` / `recheck`, `replan` / `rechallenge`). The count comes from
+the `label:` on each `agent(...)` call in
+[`standup/standup.workflow.js`](standup/standup.workflow.js) — read them and you can check it.
+Nothing here is a benchmark: this repo quotes no dollar figure because it ships no run records to
+derive one from (`standup/control/runs/` is empty by design; yours go there).
+
+`/standup` puts a roster poll in front of that, and the poll scales with the roster: **one turn per
+active developer, one per squad, one per design lead, one for the board, and one per active staff
+lens.** For a one-squad / two-developer / three-staff roster that is eight turns before any code is
+considered, so a `/standup` that works one task is twenty-four turns against `/work`'s sixteen.
+
+### The levers that actually reduce it
+
+**Name the task.** `/work <task>` skips the six roster-wide phases — Comms, Standup, Team Sync,
+Design, Synthesize, Staff Pulse, every one of them guarded on `SINGLE` in the engine — and runs the
+identical gated pipeline on the one thing you asked for. When you already know what you want done,
+the roster poll is spend that exists to discover it.
+
+**Take fewer tasks per tick.** Each additional board item is another fourteen turns: the whole
+pipeline except the once-per-run arm and disarm. Note the direction, though — both shipped
+`/standup` entry points already pass `maxTasks: 1`, so this is a knob you can only turn *up*. The
+engine's default of `2` applies to a caller that omits the argument.
+
+**Run the board without the build.** Omit `work` and you get the poll, the design pass and the
+board with no Work phase at all — eight turns on the roster above. Useful for "what should we do
+today" without paying to do it. Not reachable through `/standup`, which passes `work: true`; call
+the Workflow tool directly.
+
+**Switch roles off rather than deleting them.** `active: false` on a developer or a staff role
+removes its turn from every tick (`standup/team.json`). This is already how `comms_triage` ships,
+which is why Comms costs nothing on a fresh install.
+
+**Run the cadence less often, or not at all.** `/daily-standup [hours]` writes
+`standup/control/schedule.json`, and every scheduled tick is a full `/standup`. Four ticks a day is
+four times one tick a day. `/stop-daily-standup` turns it off at runtime.
+
+**Do not pass `design: true`.** It switches the design pass from a three-to-five-surface rotation to
+a sweep of every surface. No shipped command passes it, so unless you added it yourself you are
+already on the cheap path.
+
+### What will not save you money, whatever it looks like
+
+**`/costs` is a ceiling, not a discount — and its two halves do not reach the same distance.** The
+**daily cap** is enforced in exactly one place: `costs.claim_gate()`, called from the portal's job
+worker (`standup/portal/parsers/jobworker.py`). No other code reads `budget.json`. The **kill
+switch** is read there too, and in two more places that never go near `claim_gate()` — the
+native-team lifecycle hooks wired in [`hooks/hooks.json`](hooks/hooks.json), where `TaskCreated`
+refuses to create new teammate work and `TeammateIdle` stops a teammate instead of letting it idle.
+So the kill switch does hard-stop a `/team` run and the cap does not, because that lifecycle
+exposes no per-task cost to compare a cap against.
+
+**Neither reaches `/standup` or `/work`, and that is the part worth knowing.** Those run in your
+session through the Workflow tool, and the engine consults neither control: `kill_switch` does not
+appear in [`standup/standup.workflow.js`](standup/standup.workflow.js) at all, and `budget` appears
+only in a comment. So the control you are most likely to reach for does not stop the run that
+spends the most — use the levers above for that. All three enforcement points also stop work at a
+boundary (a new job claim, a new task, a teammate going idle) rather than aborting a turn already
+in flight.
+
+**There is no knob that runs fewer review lenses.** The review ring is derived from the task, never
+from an argument: pair review, plus two fresh-context lenses, plus a design-quality lens unless the
+squad declared `--kind none` *and* the diff left rendering alone. That declaration is the one thing
+that removes a lens — it drops design-quality and takes one turn off the task — and every lens then
+left standing is an engineering-correctness lens, which is precisely the hole the fourth one was
+added to close ([The gates](#the-gates)). `none` has to be true of your product. It is not a budget
+setting, and using it as one buys a discount by turning the answer to "is this any good" into
+nobody's job.
+
+**Model and effort tiers are not user knobs here.** The engine assigns effort per kind of thinking
+and leaves the model inheriting the session's, in constants at the top of the file with a note
+saying not to tune them by intuition. Changing them means editing the engine, and the cheap thing
+to get wrong is downgrading a judgment step, which costs less per run and more per mistake.
 
 ---
 
@@ -362,6 +461,7 @@ bash standup/control/tests/test_add_project.sh                          # /add-p
 bash standup/control/tests/test_remove_project.sh                       # /remove-project edits surgically and keeps your code
 bash standup/control/tests/test_supervisor_gate.sh                      # the gate still blocks product work and allows management
 bash standup/control/tests/test_release_invariants.sh                   # what ships is consistent with itself
+bash standup/control/tests/test_clock_independence.sh                   # the portal suite passes at every hour, not just convenient ones
 ```
 
 **Run `--self-test` before trusting a green** — it deliberately breaks the thing being judged and
@@ -375,7 +475,7 @@ renders the same payload through the pre-fix producer shape and requires the car
 both went stale the first time a judge was added, which is the same rot the paragraph below is
 about.)
 
-The last two are newer and worth saying what they are for. `test_supervisor_gate.sh` covers
+Three of them are newer and worth saying what they are for. `test_supervisor_gate.sh` covers
 `hooks/supervisor_gate.py` — the one mechanism separating "the EM supervises" from "the EM writes
 the product" — which had no test of any kind, while `verify_project.py` derives its deny list from
 that file's constants. `test_release_invariants.sh` judges the CONTENT of the release rather than
@@ -387,6 +487,13 @@ pruned — and no other judge could see either. Every case that judges the relea
 **committed** blob, never your working tree — customising your own install must never redden the
 shipped suite — and when there is no committed blob to read (a tarball install with no `.git`) the
 run says so in its summary rather than reporting a clean pass on a question it never asked.
+
+`test_clock_independence.sh` is the odd one out: it judges the SUITE rather than the product. The
+first command in that list reads the local wall clock, through `guard()`'s refusal to launch when a
+scheduled tick is minutes away — so it was red for four ten-minute windows a day, and a run at any
+other hour could not tell you that. This one replays it across the day under POSIX TZ strings. A
+suite that is red 40 minutes a day is worse than one that is red always: always-red gets fixed on
+the first run, and sometimes-red teaches a new reader that the failures are normal.
 
 Pass and failure counts are deliberately not printed here. A number copied into prose rots
 exactly the way a version number does; run the commands and read what they print.
