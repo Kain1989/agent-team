@@ -38,10 +38,13 @@ APP_JS = Path(__file__).resolve().parents[1] / "static" / "app.js"
 # A ratchet nobody turns goes slack, and this one had. The previous values were measured at
 # main@d596450 and never re-derived when db5ba38 rewrote the mock, so by main@a7f934e the
 # file measured ge40=15 ge80=3 longest=199 total=2187 against declared floors of
-# 15/3/103/2187->2091: the longest-literal floor sat at 103 while the real longest was 199,
-# leaving room to delete the mock's longest string and still pass. Re-deriving on every
-# deliberate change is not bookkeeping — a floor below the actual distribution is a floor
-# with slack in it, and slack is what it exists to remove.
+# 15/3/103/2091 — 96 characters of slack in both metrics that can see a single string. Not
+# enough to DELETE the mock's longest literal: removing it takes ge40 to 14 and ge80 to 2,
+# so all four floors go red. Enough to SHORTEN it by those 96 characters — 199 down to
+# exactly 103 — and pass all four, which is precisely the "tidy up the sample data" edit
+# this exists to stop. Re-deriving on every deliberate change is not bookkeeping — a floor
+# below the actual distribution is a floor with slack in it, and slack is what it exists to
+# remove.
 #
 # Four metrics rather than one, because any single number is easy to satisfy by accident:
 # a count of long strings, a count of very long ones, the longest single string (the one
