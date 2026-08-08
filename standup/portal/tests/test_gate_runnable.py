@@ -40,6 +40,7 @@ can make them pass vacuously.
 import json
 import os
 import re
+import shutil
 import subprocess
 
 import pytest
@@ -718,6 +719,180 @@ def test_short_flag_boundary_rejects_treating_every_flag_as_long(tmp_path, monke
     monkeypatch.setattr(gate_check, "_BARE_LONG_FLAG", re.compile(r"^-"))
     assert gate_check._interpreter_problem(f"{sys.executable} -u {BARE_MISSING}") == "", (
         "the mutation did not reproduce the over-broad rule, so the case above proves nothing")
+
+
+# A long flag's value is denied the SCRIPT role — but denying a role is not asking no
+# question. Rule 2 shipped as an unconditional `continue`, which meant a token carrying BOTH a
+# separator and a file extension and naming nothing was waved through, while the identical
+# token AFTER the script was reported. One question, two answers, decided by position alone.
+_MISSING_FLAG_VALUES = {
+    "uv-env-file": "{uv} run --env-file {missing} {script}",
+    "uv-project": "{uv} run --project {missing} {script}",
+    "python-long-flag": "{py} --check-hash-based-pycs {missing}",
+    "relative": "{uv} run --env-file lib/nope.py {script}",
+}
+
+
+@pytest.mark.parametrize("shape", list(_MISSING_FLAG_VALUES))
+def test_a_long_flags_path_shaped_value_is_still_reported_missing(tmp_path, monkeypatch,
+                                                                  shape):
+    """The fail-open rule 2 opened is only forced where the token is genuinely ambiguous.
+
+    `.env` and `pyproject.toml` carry no separator; `ts-node/register` carries no extension.
+    Nothing rule 2 exists to protect is convicted by requiring both, which is why this costs
+    none of the three shapes the round before this one was written to keep green.
+    """
+    import sys
+
+    monkeypatch.chdir(tmp_path)
+    script = tmp_path / "hook.py"
+    script.write_text(DECIDING_HOOK, encoding="utf-8")
+    missing = tmp_path / "no" / "such" / "gate.py"
+    assert not missing.exists(), "precondition: the flag value must name nothing"
+    command = _MISSING_FLAG_VALUES[shape].format(
+        uv=_fake_launcher(tmp_path, "uv"), py=sys.executable, script=script, missing=missing)
+
+    problem = gate_check._interpreter_problem(command)
+    assert "hook script does not exist" in problem, problem
+
+
+@pytest.mark.parametrize("shape", list(_MISSING_FLAG_VALUES))
+def test_flag_value_path_check_rejects_the_unconditional_skip(tmp_path, monkeypatch, shape):
+    """E-03: put rule 2's bare `continue` back and each shape is certified healthy again."""
+    import sys
+
+    monkeypatch.chdir(tmp_path)
+    script = tmp_path / "hook.py"
+    script.write_text(DECIDING_HOOK, encoding="utf-8")
+    command = _MISSING_FLAG_VALUES[shape].format(
+        uv=_fake_launcher(tmp_path, "uv"), py=sys.executable, script=script,
+        missing=tmp_path / "no" / "such" / "gate.py")
+
+    monkeypatch.setattr(gate_check, "_missing_whatever_its_role", lambda arg: False)
+    assert gate_check._interpreter_problem(command) == "", (
+        f"the pre-fix skip did not reproduce the fail-open for {shape!r}, "
+        "so the case above proves nothing")
+
+
+# The one quadrant rule 2 now decides must not swallow the ones it cannot. Each of these is a
+# REAL flag value: a relative file that resolves, an ESM loader path, a module specifier, a
+# bare filename, a version. Convicting any of them refuses to launch a working gate.
+_WORKING_FLAG_VALUES = {
+    "relative-file-that-resolves": ("--env-file", "conf/prod.env", True),
+    "loader-path-that-resolves": ("--experimental-loader", "./conf/loader.mjs", True),
+    "module-specifier": ("--loader", "ts-node/esm", False),
+    "bare-dotfile": ("--env-file", ".env", False),
+    "bare-manifest": ("--project", "pyproject.toml", False),
+    "not-a-file-at-all": ("--check-hash-based-pycs", "always", False),
+}
+
+
+@pytest.mark.parametrize("shape", list(_WORKING_FLAG_VALUES))
+def test_the_flag_value_path_check_does_not_reach_a_working_value(tmp_path, monkeypatch,
+                                                                  shape):
+    """The over-reach guard for the four cases above — measured, not reasoned about.
+
+    The two that must EXIST are created here, because "path-shaped and suffixed" describes
+    plenty of legitimate flag values (`--env-file conf/prod.env` is one). What makes the rule
+    safe is not that no real value has that shape — it is that a real one resolves.
+    """
+    monkeypatch.chdir(tmp_path)
+    script = tmp_path / "hook.py"
+    script.write_text(DECIDING_HOOK, encoding="utf-8")
+    flag, value, must_exist = _WORKING_FLAG_VALUES[shape]
+    if must_exist:
+        target = tmp_path / value
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("x\n", encoding="utf-8")
+    command = f"{_fake_launcher(tmp_path, 'uv')} run {flag} {value} {script}"
+    assert gate_check._interpreter_problem(command) == "", command
+
+
+# --------------------------------------------------------------------------------------- #
+# `bash gatehook` IS a working command: bash searches PATH for a slash-less script.
+#
+# Rule 1 asserts that a recognised interpreter's first positional is its script, then tested
+# it against the filesystem relative to OUR cwd — which is not where bash looks. Green on the
+# revision before this one, RED after: a newly introduced false RED, the outage direction.
+# `zsh` and `python3` going red on the same shape is the rule WORKING; neither searches PATH.
+# --------------------------------------------------------------------------------------- #
+ON_PATH_SCRIPT = "__gate_hook_on_path__"
+
+
+def _script_only_on_path(tmp_path, monkeypatch, mode=0o755):
+    """Put a slash-less script on PATH and NOWHERE reachable from cwd."""
+    pathdir = tmp_path / "pathonly"
+    pathdir.mkdir()
+    hook = pathdir / ON_PATH_SCRIPT
+    hook.write_text("#!/bin/sh\ncat >/dev/null\nexit 2\n", encoding="utf-8")
+    hook.chmod(mode)
+    monkeypatch.setenv("PATH", f"{pathdir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.chdir(tmp_path)
+    assert not os.path.exists(ON_PATH_SCRIPT), "precondition: unreachable from cwd"
+    return hook
+
+
+@pytest.mark.parametrize("mode", [0o755, 0o644])
+def test_a_path_searching_shell_finds_its_script_on_path(tmp_path, monkeypatch, mode):
+    """Both modes, because bash does not require the execute bit on a script it READS.
+
+    The 0o644 case is the one that decides how this is implemented: `shutil.which` answers
+    "not found" for it, so a `which`-based exemption would still refuse to launch a command
+    that works. Measured, not assumed — `bash <mode-644 script on PATH>` exits 0.
+    """
+    _script_only_on_path(tmp_path, monkeypatch, mode)
+    bash = shutil.which("bash")
+    assert bash, "bash is a prerequisite of this project"
+    assert gate_check._interpreter_problem(f"{bash} {ON_PATH_SCRIPT}") == ""
+
+
+def test_path_search_check_rejects_the_cwd_only_rule(tmp_path, monkeypatch):
+    """E-03: stop recognising any PATH-searching shell and the false RED returns."""
+    _script_only_on_path(tmp_path, monkeypatch)
+    monkeypatch.setattr(gate_check, "_PATH_SEARCHING_INTERPRETER", frozenset())
+    problem = gate_check._interpreter_problem(f"{shutil.which('bash')} {ON_PATH_SCRIPT}")
+    assert "hook script does not exist" in problem, (
+        "the pre-fix rule flagged nothing, so the case above proves nothing")
+
+
+def test_path_search_check_rejects_an_executable_only_lookup(tmp_path, monkeypatch):
+    """E-03 for the second half: `shutil.which` is not an adequate stand-in for bash's search.
+
+    This is the assertion that pins WHY the lookup is written by hand instead of reusing
+    `which`. Swap in a `which`-based predicate and the mode-644 case — a command that runs —
+    is convicted again.
+    """
+    _script_only_on_path(tmp_path, monkeypatch, mode=0o644)
+    monkeypatch.setattr(gate_check, "_found_on_path", lambda name: bool(shutil.which(name)))
+    problem = gate_check._interpreter_problem(f"{shutil.which('bash')} {ON_PATH_SCRIPT}")
+    assert "hook script does not exist" in problem, (
+        "an X_OK-only lookup did not reproduce the false RED, so the case above proves nothing")
+
+
+@pytest.mark.parametrize("shell", ["zsh", "sh"])
+def test_a_non_path_searching_interpreter_is_not_exempted(tmp_path, monkeypatch, shell):
+    """The exemption must be as narrow as the measured behaviour, not "shells are special".
+
+    `zsh` does not search PATH (measured: `zsh: can't open input file`). `sh` is excluded for
+    a different reason — it is a LINK, to bash on macOS and to dash on most Linux, and dash
+    neither searches PATH nor exits in a way the smoke run would catch (it exits 2, the
+    documented "the hook ran and blocked"). Exempting it would buy a rare false RED on one
+    platform with an unbacked fail-open on the other.
+    """
+    _script_only_on_path(tmp_path, monkeypatch)
+    binary = shutil.which(shell)
+    if not binary:
+        pytest.skip(f"{shell} is not installed here")
+    problem = gate_check._interpreter_problem(f"{binary} {ON_PATH_SCRIPT}")
+    assert "hook script does not exist" in problem, problem
+
+
+def test_the_path_exemption_is_not_a_blanket_pass(tmp_path, monkeypatch):
+    """A script that is on no PATH and no disk must still be named, bash or not."""
+    monkeypatch.chdir(tmp_path)
+    problem = gate_check._interpreter_problem(
+        f"{shutil.which('bash')} __no_such_gatehook_anywhere__")
+    assert "hook script does not exist" in problem, problem
 
 
 HOME_INTERPRETER = "~/venv/bin/python"

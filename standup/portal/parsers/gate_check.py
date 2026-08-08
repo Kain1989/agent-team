@@ -286,6 +286,40 @@ _BARE_FLAG = re.compile(r"^-{1,2}[^-=][^=]*$")
 # and 3 in `_interpreter_problem`.
 _BARE_LONG_FLAG = re.compile(r"^--")
 
+# `bash` searches PATH for a script whose name carries no slash, so there a slash-less token
+# can name a real script that exists relative to no cwd we could check. Measured here:
+#
+#     script reachable ONLY via PATH   bash 0 · sh 0 · dash 2 · zsh 127
+#     script absent everywhere         bash 127 · sh 127 · dash 2 · zsh 127
+#
+# `sh` is deliberately NOT on this list even though it behaves exactly like bash on macOS,
+# where `sh` IS bash. On most Linux — including the CI runner — `sh` is dash, which does NOT
+# search PATH, and dash's missing-script exit is **2**: the one code `_smoke_problem` accepts
+# as the documented "the hook ran and blocked". Exempting `sh` would therefore certify a
+# genuinely dead gate with nothing downstream left to catch it, on the platform CI runs on.
+# The cost of leaving it off is a rare false RED on macOS that names the exact token and is
+# fixed in seconds; the cost of putting it on is an invisible boundary. This module exists
+# because of that ordering.
+_PATH_SEARCHING_INTERPRETER = frozenset({"bash"})
+
+
+def _found_on_path(name: str) -> bool:
+    """Would a PATH-searching shell find `name`? READABILITY, not the execute bit.
+
+    Deliberately NOT `shutil.which`, which requires `X_OK`. Measured: bash runs a mode-644
+    script it finds on PATH, so `which` answers "no" for a command that works — and this
+    predicate exists precisely to stop convicting commands that work. `which` is still right
+    for argv[0], which really does have to be executable; this is a different question.
+
+    Uses the same PATH `_probe_env` hands the smoke run, so the pre-check and the run cannot
+    disagree. As with argv[0], the CHILD's PATH may differ from ours — an absolute path in
+    the config remains strongly preferred.
+    """
+    for directory in (os.environ.get("PATH") or "").split(os.pathsep):
+        if directory and os.path.isfile(os.path.join(directory, name)):
+            return True
+    return False
+
 
 def _interpreter_path(exe: str) -> str:
     """The filesystem path argv[0] names. `~` is expanded, for `_resolves`'s exact reason."""
@@ -337,6 +371,18 @@ def _cannot_be_a_path(arg: str) -> bool:
     return (_URL_MARKER in arg
             or any(c in arg for c in _GLOB_CHARS)
             or any(c.isspace() for c in arg))
+
+
+def _missing_whatever_its_role(arg: str) -> bool:
+    """Is `arg` a broken path no matter WHICH role it turns out to play?
+
+    A token that carries a separator AND a file extension AND names nothing is not a wrapper
+    subcommand, a module specifier or a version string — the three things the script-role
+    rules exist to avoid convicting. It is a path to a file that is not there, and that is a
+    broken config wherever it sits, which is the policy `_interpreter_problem`'s ARGUMENTS
+    region has always applied. This predicate lets the pre-script region apply it too.
+    """
+    return bool(_looks_like_a_path(arg) and _FILE_SUFFIX.search(arg) and not _resolves(arg))
 
 
 def _missing_path(arg: str) -> str:
@@ -419,9 +465,13 @@ def _interpreter_problem(command: str) -> str:
     #       2. A BARE `--long-flag`'s VALUE never claims the role. On real configs that
     #          position holds `--env-file .env`, `--project pyproject.toml`,
     #          `--require ts-node/register`, and convicting those refuses to launch three
-    #          working commands. Ambiguity is resolved toward fail-OPEN deliberately: this
-    #          module REFUSES TO LAUNCH on a red, so a wrong red is an outage while a wrong
-    #          green leaves the smoke run and every other layer still standing.
+    #          working commands. Denying the ROLE is not the same as asking no question,
+    #          though: such a token is still reported when it is BOTH path-shaped and
+    #          file-suffixed and names nothing, because that is a broken config whichever
+    #          role it plays — the same policy the arguments region below already applies.
+    #          Ambiguity is resolved toward fail-OPEN only where it is genuinely ambiguous:
+    #          this module REFUSES TO LAUNCH on a red, so a wrong red is an outage while a
+    #          wrong green leaves the smoke run and every other layer still standing.
     #       3. A BARE SHORT flag's value may claim the role, but only on a file EXTENSION.
     #          Short flags on these interpreters overwhelmingly take no value (`-u -B -O -E
     #          -I -q -v`), so the token after one usually IS the script — refusing it would
@@ -438,9 +488,25 @@ def _interpreter_problem(command: str) -> str:
     #           is indistinguishable from that launcher's subcommand. Rule 1 closes this for
     #           every interpreter on the list; closing it for an arbitrary wrapper would need
     #           a per-wrapper flag table, which is a maintenance burden that rots silently.
-    #       (b) A script sitting immediately after a bare `--long-flag`
-    #           (`uv run --env-file gate.py`) is denied the role by rule 2, so it is not
-    #           path-checked. It is still SMOKE-run, and for most interpreters that is enough.
+    #       (b) A script sitting immediately after a bare `--long-flag` — but only in the
+    #           three quadrants rule 2 cannot decide. Derived from this code, not asserted:
+    #           for a token there naming nothing,
+    #
+    #               path-shaped + suffixed  ->  REPORTED   (`--env-file /x/gate.py`)
+    #               path-shaped, no suffix  ->  fail-OPEN  (`--env-file /x/gatehook`)
+    #               bare      + suffixed    ->  fail-OPEN  (`--env-file gate.py`)
+    #               bare      , no suffix   ->  fail-OPEN  (`--env-file gatehook`)
+    #
+    #           The three open quadrants are exactly the shapes a REAL flag value takes —
+    #           `ts-node/register` is path-shaped without a suffix, `.env` and
+    #           `pyproject.toml` are bare with one, `requests` and `3.11` are bare without —
+    #           so closing them convicts working commands. The closed quadrant is not a shape
+    #           no flag value ever has (`--env-file conf/prod.env` is one); it is the shape
+    #           where being absent from disk is evidence enough, at the cost this module
+    #           already accepts one region below: a RELATIVE value resolved against the
+    #           checker's cwd rather than the hook's can cry wolf.
+    #
+    #           What is left is still SMOKE-run, and for most interpreters that is enough.
     #           Measured here, each handed one missing script:
     #
     #               python 2 · perl 2 · node 1 · ruby 1 · bash 127 · sh 127 · zsh 127
@@ -456,7 +522,10 @@ def _interpreter_problem(command: str) -> str:
     #     region's residual runs the other way, cry-wolf rather than fail-open —
     #     `<script> --require ts-node/register` is reported missing. Pre-existing, unchanged,
     #     and the reason it is tolerated is that a hook's own path argument that does not
-    #     resolve is far more often a real broken config than a module specifier.
+    #     resolve is far more often a real broken config than a module specifier. Rule 2's
+    #     path-shaped-AND-suffixed clause is the same policy pointed at the same ambiguity, so
+    #     the two regions no longer answer one question two ways — the pre-script one is
+    #     simply the stricter, requiring a suffix as well as a separator.
     #
     # Excluded from every role, because they carry a separator while naming nothing: URLs,
     # globs, and tokens that still contain whitespace after `shlex` (see `_cannot_be_a_path`).
@@ -484,6 +553,18 @@ def _interpreter_problem(command: str) -> str:
             continue
         if not script_found:
             if preceding_flag and _BARE_LONG_FLAG.match(preceding_flag):
+                # Rule 2 denies the SCRIPT role — but denying a role is not the same as
+                # asking no question. A token that is BOTH path-shaped and file-suffixed
+                # and names nothing is a broken config whichever role it turns out to
+                # play, which is exactly the policy the arguments region below already
+                # applies ("a missing one is still a broken config whatever position it
+                # sits in"). Applying the opposite policy here purely because the token
+                # sits BEFORE the script rather than after it was an inconsistency, not a
+                # decision. None of the real flag values this rule exists to protect are
+                # convicted: `.env` and `pyproject.toml` carry no separator, and
+                # `ts-node/register` carries no suffix.
+                if _missing_whatever_its_role(arg):
+                    return _missing_path(arg)
                 continue                                            # rule 2
             elif preceding_flag:
                 claims_script = bool(_FILE_SUFFIX.search(arg))       # rule 3
@@ -493,6 +574,12 @@ def _interpreter_problem(command: str) -> str:
                                  or bool(_FILE_SUFFIX.search(arg)))
             if claims_script:
                 script_found = True
+                # `bash gatehook` resolves through PATH, so "not on disk here" is not the
+                # same as "missing" for it. Guarded by the slash test because that is the
+                # condition bash itself applies — a name with a separator is never searched.
+                if (interp_name in _PATH_SEARCHING_INTERPRETER
+                        and os.sep not in arg and _found_on_path(arg)):
+                    continue
                 if not _resolves(arg):
                     return _missing_path(arg)
             continue
