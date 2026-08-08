@@ -895,6 +895,99 @@ def test_the_path_exemption_is_not_a_blanket_pass(tmp_path, monkeypatch):
     assert "hook script does not exist" in problem, problem
 
 
+@pytest.mark.parametrize("mode", [0o000, 0o111])
+def test_a_script_bash_cannot_READ_is_not_exempted_by_being_on_path(tmp_path, monkeypatch, mode):
+    """The other edge of `_found_on_path`: present on PATH, and still not runnable.
+
+    The exemption's premise is that bash READS the script, which is why it does not need the
+    execute bit (the 644 case above). The same premise cuts the other way and used not to be
+    checked: mode 000 has neither bit and mode 111 has only the one bash does not use, and
+    bash reports both as `No such file or directory` with exit 127 — measured, as a non-root
+    user, which is the only condition under which R_OK means anything.
+
+    `os.path.isfile` says True for both, so before this the predicate over-reported exactly
+    where its docstring promised care.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("running as root: R_OK is vacuously true, so this case cannot fail")
+    _script_only_on_path(tmp_path, monkeypatch, mode=mode)
+    problem = gate_check._interpreter_problem(f"{shutil.which('bash')} {ON_PATH_SCRIPT}")
+    assert "hook script does not exist" in problem, (
+        f"mode {mode:o} is present on PATH but bash cannot read it (exit 127); "
+        f"the pre-check must not certify it. got: {problem!r}")
+
+
+def test_path_lookup_check_rejects_an_existence_only_lookup(tmp_path, monkeypatch):
+    """E-03 for the case above: restore the bare `isfile` lookup and it must go red.
+
+    This is the mutation that matters, because `isfile`-only is what the code did — the
+    docstring said READABILITY and the body checked neither readability nor executability.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("running as root: R_OK is vacuously true, so this mutation cannot bite")
+    _script_only_on_path(tmp_path, monkeypatch, mode=0o000)
+    monkeypatch.setattr(gate_check, "_found_on_path", lambda name: any(
+        d and os.path.isfile(os.path.join(d, name))
+        for d in (os.environ.get("PATH") or "").split(os.pathsep)))
+    problem = gate_check._interpreter_problem(f"{shutil.which('bash')} {ON_PATH_SCRIPT}")
+    assert problem == "", (
+        "an existence-only lookup did not certify the unreadable script, so the case above "
+        f"proves nothing. got: {problem!r}")
+
+
+# --------------------------------------------------------------------------------------- #
+# The separator guard on the PATH exemption. Judged by NOTHING until now: a reviewer deleted
+# `os.sep not in arg` and the whole suite stayed green, which is the state a load-bearing
+# guard is in right before someone removes it as dead code.
+# --------------------------------------------------------------------------------------- #
+def test_the_path_exemption_never_applies_to_a_token_with_a_separator(tmp_path, monkeypatch):
+    """`bash sub/hook.sh` is not a PATH lookup — bash takes any name with a slash as a path.
+
+    Without the guard the exemption asks `_found_on_path("sub/hook.sh")`, which joins the
+    token onto each PATH entry and answers True whenever some PATH directory happens to hold
+    a `sub/`. Measured: with the script at `<pathdir>/sub/hook.sh` and no `./sub/hook.sh`,
+    `bash sub/hook.sh` exits 127 while that lookup returns True. Certifying it would be a
+    fail-open — the gate config would be declared launchable and the hook would never run.
+    """
+    pathdir = tmp_path / "pathonly"
+    (pathdir / "sub").mkdir(parents=True)
+    hook = pathdir / "sub" / "hook.sh"
+    hook.write_text("#!/bin/sh\nexit 2\n", encoding="utf-8")
+    hook.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{pathdir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.chdir(tmp_path)
+    assert not os.path.exists("sub/hook.sh"), "precondition: unreachable from cwd"
+    # precondition: the underlying lookup IS fooled — that is why the guard has to exist
+    assert gate_check._found_on_path("sub/hook.sh"), (
+        "precondition failed: this case only bites while _found_on_path is fooled by the join")
+
+    problem = gate_check._interpreter_problem(f"{shutil.which('bash')} sub/hook.sh")
+    assert "hook script does not exist" in problem, (
+        f"a separator-bearing token must never take the PATH exemption. got: {problem!r}")
+
+
+def test_separator_guard_check_rejects_dropping_the_guard(tmp_path, monkeypatch):
+    """E-03: remove the guard and the case above must go red.
+
+    The guard is a named predicate rather than an inline `os.sep not in arg` precisely so this
+    mutation is expressible — and so the next reader finds a docstring where they would
+    otherwise find a bare expression that looks redundant.
+    """
+    pathdir = tmp_path / "pathonly"
+    (pathdir / "sub").mkdir(parents=True)
+    hook = pathdir / "sub" / "hook.sh"
+    hook.write_text("#!/bin/sh\nexit 2\n", encoding="utf-8")
+    hook.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{pathdir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(gate_check, "_is_path_searched", lambda arg: True)
+
+    problem = gate_check._interpreter_problem(f"{shutil.which('bash')} sub/hook.sh")
+    assert problem == "", (
+        "dropping the guard did not wave the unrunnable command through, so the case above "
+        f"proves nothing. got: {problem!r}")
+
+
 HOME_INTERPRETER = "~/venv/bin/python"
 
 
