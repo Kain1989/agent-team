@@ -720,6 +720,56 @@ def test_short_flag_boundary_rejects_treating_every_flag_as_long(tmp_path, monke
         "the mutation did not reproduce the over-broad rule, so the case above proves nothing")
 
 
+HOME_INTERPRETER = "~/venv/bin/python"
+
+
+def _home_venv(tmp_path, monkeypatch):
+    """A REAL interpreter at `~/venv/bin/python`, with HOME repointed at `tmp_path`.
+
+    A symlink to this interpreter rather than a stub, so the whole config can be certified end
+    to end — the smoke run has to be able to execute it, and a checker that only proves
+    `isfile` is the exact shape of check this module exists to replace.
+    """
+    import sys
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    venv_python = tmp_path / "venv" / "bin" / "python"
+    venv_python.parent.mkdir(parents=True)
+    os.symlink(sys.executable, venv_python)
+    script = tmp_path / "hook.py"
+    script.write_text(DECIDING_HOOK, encoding="utf-8")
+    return f"{HOME_INTERPRETER} {script}"
+
+
+def test_home_relative_interpreter_is_accepted_and_a_missing_one_still_named(tmp_path,
+                                                                             monkeypatch):
+    """The `~` fix landed on the ARGUMENT side and not on argv[0] — half of its own commit.
+
+    `os.path.isfile` was asked about a literal directory named `~`, which is never there, so
+    `~/venv/bin/python <hook>` could never pass however real the interpreter was. Both halves
+    are here in one test: expanding `~` must not become a blanket pass, so a `~` path that
+    genuinely names nothing must still be named — that is the only difference between fixing
+    the check and removing it.
+    """
+    command = _home_venv(tmp_path, monkeypatch)
+    assert gate_check._interpreter_problem(command) == "", command
+    assert gate_config_problems(_write_gate(tmp_path, command, name="home.json")) == []
+
+    problem = gate_check._interpreter_problem(f"~/nope/bin/python {tmp_path}/hook.py")
+    assert "hook interpreter does not exist" in problem, problem
+    assert "~/nope/bin/python" in problem, problem
+
+
+def test_home_relative_interpreter_check_rejects_the_unexpanded_rule(tmp_path, monkeypatch):
+    """E-03: put the unexpanded token back and the working interpreter is reported missing."""
+    command = _home_venv(tmp_path, monkeypatch)
+    monkeypatch.setattr(gate_check, "_interpreter_path", lambda exe: exe)
+    problem = gate_check._interpreter_problem(command)
+    assert "hook interpreter does not exist" in problem, (
+        "the pre-fix rule flagged nothing, so the case above proves nothing")
+    assert HOME_INTERPRETER in problem, problem
+
+
 # --------------------------------------------------------------------------------------- #
 # THE OTHER DIRECTION: arguments that carry a separator and name no file.
 #

@@ -185,6 +185,14 @@ def _smoke_problem(command: str) -> str:
         return ""  # already reported by _interpreter_problem
     if not argv:
         return ""
+    # argv[0] is expanded with the SAME function the static check used, for the same reason it
+    # uses `_probe_env()['PATH']` for a bare name: the pre-check and the run must not disagree.
+    # `subprocess.run` execs directly, with no shell to expand `~`, so without this a
+    # `~/venv/bin/python` config passes the static check and then dies here on ENOENT — the
+    # static half fixed, the run half not, which is the same half-a-fix this replaces. Only
+    # argv[0]: the remaining tokens are handed to the hook as written, and rewriting what a
+    # hook receives is a different question from whether it can start.
+    argv[0] = _interpreter_path(argv[0])
     try:
         sandbox = tempfile.mkdtemp(prefix="gate-smoke-")
     except OSError as exc:                                       # pragma: no cover - guard
@@ -279,6 +287,11 @@ _BARE_FLAG = re.compile(r"^-{1,2}[^-=][^=]*$")
 _BARE_LONG_FLAG = re.compile(r"^--")
 
 
+def _interpreter_path(exe: str) -> str:
+    """The filesystem path argv[0] names. `~` is expanded, for `_resolves`'s exact reason."""
+    return os.path.expanduser(exe)
+
+
 def _effective_interpreter(argv: List[str]) -> Tuple[int, str]:
     """`(index, basename)` of the token that actually runs the hook.
 
@@ -347,16 +360,24 @@ def _interpreter_problem(command: str) -> str:
         return f"hook command is empty: {command!r}"
 
     exe = argv[0]
-    if os.sep in exe or exe.startswith("."):
-        # An absolute/relative path: it must exist AND be executable. This is the
+    if os.sep in exe or exe.startswith((".", "~")):
+        # An absolute/relative/home path: it must exist AND be executable. This is the
         # check that was missing — an uninstalled interpreter's path is a perfectly
         # well-formed string that names nothing.
-        if not os.path.isfile(exe):
+        #
+        # `~` is expanded here for the same reason `_resolves` expands it on the ARGUMENT
+        # side: without it this asked about a literal directory named `~`, which is never
+        # there, so `~/venv/bin/python <hook>` could never pass however real the interpreter
+        # was. That expansion landed on the arguments and not on argv[0] — half a fix, and the
+        # half that a hand-written config is most likely to trip. The message still names the
+        # token as WRITTEN, because that is the string the config has to be fixed in.
+        exe_path = _interpreter_path(exe)
+        if not os.path.isfile(exe_path):
             return (
                 f"hook interpreter does not exist: {exe!r} — Claude Code FAILS OPEN "
                 f"on an unlaunchable hook, so this gate would silently allow every tool"
             )
-        if not os.access(exe, os.X_OK):
+        if not os.access(exe_path, os.X_OK):
             return f"hook interpreter is not executable: {exe!r}"
     else:
         # A bare name resolved through PATH. Note the child's PATH may differ from
