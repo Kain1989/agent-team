@@ -208,6 +208,13 @@ run_cases() {
 # proven green first, because "did it go red" answers yes for the wrong reason on a case that was
 # already red. Two CONTROLS plant well-formed input and require the cases to stay green: a mutation
 # set proves a check fires on bad input, only a control proves it holds its tongue on good input.
+#
+# Every case asserts the EXIT STATUS as well as the text, and `verdict-text-and-exit-code-agree`
+# pins the two together in both polarities. That is not belt-and-braces: an earlier version of this
+# self-test read stdout only, and a judge with `fails` neutralised in check() printed both cases as
+# FAIL, printed "all checks PASS", exited 0 on a desynchronised release — and this self-test
+# reported PASS over the top of it. CI reads the exit status and nothing else, so the one channel
+# that gates the release was the one channel nothing checked.
 # ------------------------------------------------------------------------------------------------
 stage_root() { # -> a temp dir holding just the three files this judge reads
   local d; d="$(mktemp -d)"
@@ -240,10 +247,17 @@ with open(path, "w", encoding="utf-8") as fh:
 PY
 }
 
-expect() { # label  dir  grep-pattern...  (every pattern must appear in the judged output)
-  local label="$1" d="$2"; shift 2
-  local out pat
-  out="$(STANDUP_VERSION_ROOT="$d" bash "$0" 2>&1)"
+# Assert the judged run's TEXT and its EXIT STATUS together.
+#
+# Text alone is not enough, and the gap was real: this helper used to grep stdout and throw the
+# status away, so a judge that printed every case as FAIL and then exited 0 passed its own
+# self-test. CI reads the exit code and nothing else — asserting only the channel CI ignores is
+# how a judge ends up unable to catch its own breakage, which is the one thing this repo does not
+# get to ship twice.
+expect() { # label  dir  expected-rc  grep-pattern...
+  local label="$1" d="$2" want_rc="$3"; shift 3
+  local out rc pat
+  out="$(STANDUP_VERSION_ROOT="$d" bash "$0" 2>&1)"; rc=$?
   for pat in "$@"; do
     if ! grep -qF -- "$pat" <<<"$out"; then
       printf '  %-42s → ERROR  expected %s\n' "$label" "$pat" >&2
@@ -251,8 +265,29 @@ expect() { # label  dir  grep-pattern...  (every pattern must appear in the judg
       return 1
     fi
   done
-  printf '  %-42s → as required\n' "$label"
+  if [[ "$rc" != "$want_rc" ]]; then
+    printf '  %-42s → ERROR  the text was right but the judge exited %s, wanted %s.\n' \
+      "$label" "$rc" "$want_rc" >&2
+    printf '     CI reads ONLY this number, so a green here would gate nothing.\n' >&2
+    sed 's/^/       /' <<<"$out" >&2
+    return 1
+  fi
+  printf '  %-42s → as required (exit %s)\n' "$label" "$rc"
   return 0
+}
+
+# Whatever the judge decides, it says so THREE times — the per-case rows, the summary line, and the
+# exit status — and CI only ever reads the last. Those three must not be able to disagree. A judge
+# whose rows read FAIL while its status reads 0 is worse than a broken judge: it is a broken judge
+# reporting healthy, on the one channel that gates the release.
+verdict_agrees() { # dir  -> 0 when rows, summary and exit status tell the same story
+  local out rc rows summary
+  out="$(STANDUP_VERSION_ROOT="$1" bash "$0" 2>&1)"; rc=$?
+  grep -q '→ FAIL' <<<"$out" && rows=failed || rows=passed
+  grep -qE '^[0-9]+ check\(s\) FAILED$' <<<"$out" && summary=failed || summary=passed
+  VERDICT_DETAIL="rows=$rows summary=$summary exit=$rc"
+  [[ "$rows" == "$summary" ]] || return 1
+  if [[ "$rows" == failed ]]; then [[ $rc -ne 0 ]]; else [[ $rc -eq 0 ]]; fi
 }
 
 self_test() {
@@ -268,8 +303,35 @@ self_test() {
   # CONTROL 1 — an untouched copy must stay green. Without this, every mutation below could be
   # passing because the judge fails on ANY staged tree.
   d="$(stage_root)"
-  expect "control-untouched-copy-stays-green" "$d" \
+  expect "control-untouched-copy-stays-green" "$d" 0 \
     "manifests-agree → PASS" "changelog-matches-manifests → PASS" || rc=3
+  rm -rf "$d"
+
+  # THE VERDICT MUST SPEAK WITH ONE VOICE, in both polarities. Checked before the desync cases
+  # because they are the ones that assert on the exit status, and this is what makes that status
+  # mean anything. Neutralising `fails` in check() produces a judge that prints every row as FAIL,
+  # then prints "all checks PASS" and exits 0 on a genuinely broken release — green in CI, which
+  # reads nothing else. A self-test that greps only stdout cannot see that, and this one used to.
+  d="$(stage_root)"
+  set_version "$d" market "9.9.9"
+  if verdict_agrees "$d"; then
+    printf '  %-42s → agree on a BROKEN release (%s)\n' "verdict-text-and-exit-code-agree" "$VERDICT_DETAIL"
+  else
+    printf '  %-42s → ERROR  the judge contradicted itself: %s\n' \
+      "verdict-text-and-exit-code-agree" "$VERDICT_DETAIL" >&2
+    printf '     CI reads only the exit status, so this combination ships as green.\n' >&2
+    rc=3
+  fi
+  rm -rf "$d"
+
+  d="$(stage_root)"
+  if verdict_agrees "$d"; then
+    printf '  %-42s → agree on a CLEAN release (%s)\n' "verdict-text-and-exit-code-agree" "$VERDICT_DETAIL"
+  else
+    printf '  %-42s → ERROR  the judge contradicted itself: %s\n' \
+      "verdict-text-and-exit-code-agree" "$VERDICT_DETAIL" >&2
+    rc=3
+  fi
   rm -rf "$d"
 
   # A — marketplace.json alone. Chosen over plugin.json for the clean diagonal: case A must go red
@@ -277,7 +339,7 @@ self_test() {
   # to plugin.json rather than to "any manifest".
   d="$(stage_root)"
   set_version "$d" market "9.9.9"
-  expect "manifests-disagree-with-each-other" "$d" \
+  expect "manifests-disagree-with-each-other" "$d" 1 \
     "manifests-agree → FAIL" "changelog-matches-manifests → PASS" || rc=3
   rm -rf "$d"
 
@@ -296,7 +358,7 @@ for i, line in enumerate(lines):
 with open(path, "w", encoding="utf-8") as fh:
     fh.writelines(lines)
 PY
-  expect "changelog-behind-the-manifests" "$d" \
+  expect "changelog-behind-the-manifests" "$d" 1 \
     "changelog-matches-manifests → FAIL" "manifests-agree → PASS" || rc=3
   rm -rf "$d"
 
@@ -306,7 +368,7 @@ PY
   # this release's number hardcoded in it.
   d="$(stage_root)"
   set_version "$d" plugin "9.9.9"
-  expect "plugin-manifest-is-the-one-both-read" "$d" \
+  expect "plugin-manifest-is-the-one-both-read" "$d" 1 \
     "manifests-agree → FAIL" "changelog-matches-manifests → FAIL" || rc=3
   rm -rf "$d"
 
@@ -323,7 +385,7 @@ doc["plugins"] = [p for p in doc["plugins"] if p.get("name") != "agent-team"]
 with open(path, "w", encoding="utf-8") as fh:
     json.dump(doc, fh, indent=2)
 PY
-  expect "marketplace-entry-missing-is-a-failure" "$d" \
+  expect "marketplace-entry-missing-is-a-failure" "$d" 1 \
     "manifests-agree → FAIL" "has no entry" || rc=3
   rm -rf "$d"
 
@@ -337,7 +399,7 @@ with open(path, encoding="utf-8") as fh:
 with open(path, "w", encoding="utf-8") as fh:
     fh.write(re.sub(r"(?m)^##\s+\[", "## ", text))
 PY
-  expect "changelog-with-no-version-heading-fails" "$d" \
+  expect "changelog-with-no-version-heading-fails" "$d" 1 \
     "changelog-matches-manifests → FAIL" "no \`## [x.y.z]\` version heading" || rc=3
   rm -rf "$d"
 
@@ -357,7 +419,7 @@ for i, line in enumerate(lines):
 with open(path, "w", encoding="utf-8") as fh:
     fh.writelines(lines)
 PY
-  expect "control-unreleased-section-stays-green" "$d" \
+  expect "control-unreleased-section-stays-green" "$d" 0 \
     "manifests-agree → PASS" "changelog-matches-manifests → PASS" || rc=3
   rm -rf "$d"
 
