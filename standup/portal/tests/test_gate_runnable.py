@@ -38,11 +38,13 @@ can make them pass vacuously.
 """
 
 import json
+import os
+import re
 import subprocess
 
 import pytest
 
-from parsers import agent_run, paths
+from parsers import agent_run, gate_check, paths
 from parsers.gate_check import (
     GateConfigError,
     gate_config_problems,
@@ -234,6 +236,169 @@ def test_smoke_run_cannot_be_stubbed_out(tmp_path, monkeypatch):
     crash.write_text("raise SystemExit(1)\n", encoding="utf-8")
     problems = gate_config_problems(_write_gate(tmp_path, f"{sys.executable} {crash}"))
     assert problems, "a stubbed subprocess.run must not certify a hook that exits 1"
+
+
+# --------------------------------------------------------------------------------------- #
+# WHAT THE PROBE HANDS THE HOOK.
+#
+# `_smoke_problem` EXECUTES the command named in an on-disk config. It used to do so under
+# the FULL parent environment — so the one place this repo runs a config-named command was
+# also the one place handing it every token the portal process holds. Captured from inside
+# a probe on this box: SNOWFLAKE_TOKEN, ATLASSIAN_API_TOKEN, SLACK_BOT_TOKEN. The same
+# command, run as a REAL hook, runs under agent_run._child_env(), which strips exactly those.
+#
+# Not a privilege escalation — whoever can write control/job_*_gate.json can already install
+# a three-line hook that allows everything, which is strictly easier and more useful — but it
+# is a real exposure with no reason to exist, and "the easier attack is worse" is not an
+# argument for leaving the harder one open.
+# --------------------------------------------------------------------------------------- #
+_CREDENTIALISH = re.compile(
+    r"(SNOWFLAKE|SLACK|ATLASSIAN|BITBUCKET|JIRA|GITHUB|OPENAI|ANTHROPIC|AWS|AZURE|GCP|NPM"
+    r"|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API[_-]?KEY|PRIVATE[_-]?KEY|_KEY$|^KEY$)",
+    re.IGNORECASE,
+)
+
+PLANTED_CREDENTIALS = {
+    # The three actually observed leaking, plus one that no strip-list named after a secret
+    # would catch — which is why the probe uses an ALLOW-list.
+    "SNOWFLAKE_TOKEN": "sf-probe-canary",
+    "ATLASSIAN_API_TOKEN": "atl-probe-canary",
+    "SLACK_BOT_TOKEN": "xoxb-probe-canary",
+    "DATABASE_URL": "postgres://user:probe-canary@host/db",
+}
+
+
+def _credential_vars(env):
+    """Every variable name in `env` that looks like it carries a credential."""
+    return sorted(k for k in env if _CREDENTIALISH.search(k))
+
+
+def _reporting_gate(tmp_path):
+    """A healthy gate whose hook DUMPS the environment + cwd it was given.
+
+    It answers correctly (exit 0, parseable decision) so the gate is still certified
+    healthy — the point is what the probe handed it, not whether it passed.
+    """
+    import sys
+    report = tmp_path / "probe_report.json"
+    script = tmp_path / "reporting_hook.py"
+    script.write_text(
+        "import json, os, sys\n"
+        "sys.stdin.read()\n"
+        "json.dump({'env': dict(os.environ), 'cwd': os.getcwd(),\n"
+        "           'cwd_entries': sorted(os.listdir('.'))},\n"
+        "          open(%r, 'w'))\n"
+        "print(json.dumps({'hookSpecificOutput': {'hookEventName': 'PreToolUse',\n"
+        "  'permissionDecision': 'deny', 'permissionDecisionReason': 'probe'}}))\n"
+        % str(report),
+        encoding="utf-8",
+    )
+    return _write_gate(tmp_path, f"{sys.executable} {script}"), report
+
+
+@pytest.fixture
+def planted_credentials(monkeypatch):
+    for name, value in PLANTED_CREDENTIALS.items():
+        monkeypatch.setenv(name, value)
+    return PLANTED_CREDENTIALS
+
+
+def test_smoke_probe_is_handed_no_credentials(tmp_path, planted_credentials):
+    gate, report = _reporting_gate(tmp_path)
+    assert gate_config_problems(gate) == [], "precondition: the reporting hook is healthy"
+
+    seen = json.loads(report.read_text(encoding="utf-8"))["env"]
+    assert _credential_vars(seen) == [], (
+        "the smoke probe was handed credential-bearing variables: %s"
+        % _credential_vars(seen))
+    for name, value in planted_credentials.items():
+        assert name not in seen, name
+    assert not any(value in v for v in seen.values() for value in planted_credentials.values()), (
+        "a planted secret reached the probe under a different variable name")
+    assert "PATH" in seen, "stripping must not break a bare-name interpreter"
+
+
+def test_probe_env_check_rejects_the_inherited_environment(tmp_path, monkeypatch,
+                                                           planted_credentials):
+    """E-03 for the assertion above: restore the pre-fix env and it must go red.
+
+    A test that only ever sees a clean environment cannot tell "the fix works" from "this
+    box exports no secrets". Putting the old behaviour back — the full parent environment —
+    has to make `_credential_vars` non-empty, or the check above is decoration.
+    """
+    monkeypatch.setattr(gate_check, "_probe_env", lambda: dict(os.environ))
+    gate, report = _reporting_gate(tmp_path)
+    assert gate_config_problems(gate) == []
+
+    seen = json.loads(report.read_text(encoding="utf-8"))["env"]
+    leaked = _credential_vars(seen)
+    assert leaked, "the pre-fix environment leaked nothing — the canaries did not apply"
+    for name in planted_credentials:
+        assert name in seen, f"{name} should be visible to the pre-fix probe"
+
+
+def test_smoke_probe_runs_in_a_pinned_empty_directory(tmp_path):
+    """The hook must not be handed the caller's cwd.
+
+    A hook that resolves a relative path would otherwise operate on whatever directory the
+    portal happened to be started from. It gets a fresh empty one, removed afterwards.
+    """
+    gate, report = _reporting_gate(tmp_path)
+    assert gate_config_problems(gate) == []
+
+    dump = json.loads(report.read_text(encoding="utf-8"))
+    assert os.path.realpath(dump["cwd"]) != os.path.realpath(os.getcwd()), dump["cwd"]
+    assert dump["cwd_entries"] == [], f"the probe cwd was not empty: {dump['cwd_entries']}"
+    assert not os.path.exists(dump["cwd"]), "the probe directory must be cleaned up"
+
+
+def test_probe_cwd_check_rejects_an_inherited_cwd(tmp_path, monkeypatch):
+    """E-03 for the cwd assertion: make the probe inherit the caller's cwd again."""
+    real_run = gate_check._RUN
+    monkeypatch.setattr(gate_check, "_RUN",
+                        lambda *a, **kw: real_run(*a, **{**kw, "cwd": None}))
+    gate, report = _reporting_gate(tmp_path)
+    assert gate_config_problems(gate) == []
+
+    dump = json.loads(report.read_text(encoding="utf-8"))
+    assert os.path.realpath(dump["cwd"]) == os.path.realpath(os.getcwd()), (
+        "the mutation did not reproduce the inherited cwd, so the check above proves nothing")
+
+
+# --------------------------------------------------------------------------------------- #
+# A MISSING HOOK IS NAMED, whatever it is written in.
+#
+# The check read `arg.endswith(".py")`, so a config naming a missing `hook.sh`/`hook.js`/
+# extensionless hook was reported as having no path problem. Still fail-CLOSED (the smoke run
+# catches it) but only as "hook EXITS 2" — which points the reader at the hook's logic instead
+# of at the path that is not there.
+# --------------------------------------------------------------------------------------- #
+@pytest.mark.parametrize("name", ["hook.sh", "hook.js", "hook.rb", "gatehook"])
+def test_missing_hook_script_is_named_whatever_its_extension(tmp_path, name):
+    import sys
+    problem = gate_check._interpreter_problem(f"{sys.executable} {tmp_path}/{name}")
+    assert "hook script does not exist" in problem, problem
+    assert name in problem, problem
+
+
+@pytest.mark.parametrize("command", [
+    "{py} -c 'import sys; sys.stdout.write(\"/no/such/path\")'",   # code, not a path
+    "{py} -m json.tool",                                           # a module, not a path
+    "{py} -u {script}",                                            # a flag that takes no value
+    "{py} {script} --verbose",                                     # a valueless flag after it
+])
+def test_interpreter_check_does_not_cry_wolf(tmp_path, command):
+    """The other half: a checker that flags well-formed commands gets switched off.
+
+    This repo threw away a backtick linter for exactly that once. `-c` and `-m` carry
+    arbitrary text that can contain a `/`, so their values are skipped rather than read as
+    paths.
+    """
+    import sys
+    script = tmp_path / "hook.py"
+    script.write_text(DECIDING_HOOK, encoding="utf-8")
+    resolved = command.format(py=sys.executable, script=script)
+    assert gate_check._interpreter_problem(resolved) == "", resolved
 
 
 def test_missing_catchall_matcher_is_rejected(tmp_path):

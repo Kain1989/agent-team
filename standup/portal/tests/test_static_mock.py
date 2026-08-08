@@ -28,22 +28,36 @@ APP_JS = Path(__file__).resolve().parents[1] / "static" / "app.js"
 # --------------------------------------------------------------------------------------- #
 # The floor.
 #
-# Measured on the shipped app.js at main@d596450 — i.e. the distribution that ALREADY
-# existed before this file was written, not one tuned to fit a diff. It is a ratchet: the
-# mock may get longer, never shorter. If you deliberately restructure the mock and a number
-# below no longer holds, re-derive it and say in the commit why the fixture is still able to
-# expose a long-string layout break — do not just lower it, that is the cleanup this guards
-# against.
+# RE-DERIVED from the shipped app.js after `product_qa` was added to the mock — measured,
+# not chosen, and measured with the scanner below so the numbers and the checker cannot
+# disagree. It is a ratchet: the mock may get longer, never shorter. If you deliberately
+# restructure the mock and a number below no longer holds, re-derive it and say in the
+# commit why the fixture is still able to expose a long-string layout break — do not just
+# lower it, that is the cleanup this guards against.
+#
+# A ratchet nobody turns goes slack, and this one had. The previous values were measured at
+# main@d596450 and never re-derived when db5ba38 rewrote the mock, so by main@a7f934e the
+# file measured ge40=15 ge80=3 longest=199 total=2187 against declared floors of
+# 15/3/103/2187->2091: the longest-literal floor sat at 103 while the real longest was 199,
+# leaving room to delete the mock's longest string and still pass. Re-deriving on every
+# deliberate change is not bookkeeping — a floor below the actual distribution is a floor
+# with slack in it, and slack is what it exists to remove.
 #
 # Four metrics rather than one, because any single number is easy to satisfy by accident:
 # a count of long strings, a count of very long ones, the longest single string (the one
 # that actually wraps), and the total, so trading one long string for several short ones
 # does not read as "unchanged".
+#
+# NOTE ON WHAT THIS FILE DOES **NOT** COVER. These floors judge LENGTH. Whether the mock
+# still carries every staff id the shipped roster declares is a different question with a
+# different correct answer for a user who has run `/add-role --staff`, so it lives in
+# `standup/control/tests/test_release_invariants.sh` (group D), judged against the COMMITTED
+# roster rather than the one on your disk — the distinction cf8ae07 was written for.
 # --------------------------------------------------------------------------------------- #
-FLOOR_GE40 = 15      # literals at least 40 chars
-FLOOR_GE80 = 3       # literals at least 80 chars — the multi-line wrap band
-FLOOR_LONGEST = 103  # the single longest literal
-FLOOR_TOTAL = 2091   # total characters across every literal in the mock
+FLOOR_GE40 = 17      # literals at least 40 chars
+FLOOR_GE80 = 4       # literals at least 80 chars — the multi-line wrap band
+FLOOR_LONGEST = 702  # the single longest literal (product_qa's note, verbatim from team.json)
+FLOOR_TOTAL = 2978   # total characters across every literal in the mock
 
 
 def _read() -> str:
