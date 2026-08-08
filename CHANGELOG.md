@@ -3,6 +3,202 @@
 All notable changes to the **agent-team** plugin. Format: [Keep a Changelog](https://keepachangelog.com/);
 this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.2] — 2026-08-07
+
+**Every portal job ran behind a security boundary that could quietly not be there.** Claude Code
+does not fail closed on a PreToolUse hook it cannot execute — it runs the tool, records zero
+denials and writes nothing to stderr, so a job whose gate config named an interpreter that had
+since been uninstalled was indistinguishable from a job that ran fully gated. Nothing in `0.5.1`
+looked. That is the change most likely to alter what you see.
+
+Six merges landed after `0.5.1` and none of them had an entry here; this covers all six. No command
+was added, removed or resignatured. On a healthy install the only difference you should notice is
+that a job takes about 36ms longer to start.
+
+### Security — a job whose gate cannot run is now refused instead of launched ungated
+
+[`SECURITY.md`](SECURITY.md) promises a code task four independent layers, the third being "a
+deny-by-default PreToolUse hook confining every read AND write to the job's worktree". That layer
+was conditional on Claude Code being able to exec the hook, and nothing established that it could.
+
+Measured on Claude Code 2.1.222 — one variable changed, everything else byte-identical:
+
+| PreToolUse hook `command` | Write tool | `permission_denials` | stderr |
+|---|---|---|---|
+| a working interpreter + the hook | BLOCKED | 1 | none |
+| a script that exits 2 | BLOCKED | 1 | none |
+| a **missing** interpreter + the hook | **RAN** | 0 | none |
+| no `--settings` at all | RAN | 0 | none |
+
+The boundary does not degrade into something noisy — it disappears, and the result JSON has the
+same shape as a run with no hook configured at all. It cannot be fixed inside the hook, because the
+hook is the thing that is not running, so `parsers/agent_run.py` now verifies the config *before*
+launching and returns a refusal rather than starting the job. Both `run_readonly()` and
+`run_code_task()` do it. A rotted boundary stops work instead of silently unprotecting it: blocked
+work is visible and somebody fixes it, an evaporated boundary is not.
+
+**What you may have to do.** If the interpreter baked into your gate config has moved since you last
+ran `./setup.sh` — a deleted venv, a Homebrew python upgraded out from under you — jobs that used to
+run will now stop, with a message naming the exact token. Re-run `./setup.sh`; it regenerates both
+`standup/control/job_*_gate.json` from their templates with this install's absolute paths. Both
+shipped configs were found in precisely that state on a real install, which is how this was noticed.
+
+Verification is a smoke run, not a path check: the hook is executed once per job with a synthetic
+`PreToolUse` event and must exit 0 with a parseable decision, or exit 2 as the documented block. One
+mechanism covers a missing interpreter, a non-executable one, a missing script, a script that
+crashes, and a `/usr/bin/python3` that resolves but exits non-zero once Command Line Tools go
+missing in an OS upgrade — the last two being exactly the ones an existence check certifies as
+healthy. The probe runs in a fresh empty directory, removed afterwards, under an allow-listed
+environment rather than a strip-list, so `DATABASE_URL`, `GH_PAT` and `KUBECONFIG` — none of which
+match a secret-shaped pattern — never reach the hook by name or by value.
+
+**Read the green as liveness, not integrity.** It answers "is a boundary there and answering", never
+"is the boundary correct". A three-line hook that replies `allow` to everything passes by design, and
+whoever can write the config can install one — a strictly easier attack than anything the smoke run
+adds. Whether the gate decides the *right* thing is still the job of `standup/control/job_*_gate_hook.py`
+and the tests that pin their decisions.
+
+### Changed — a hand-written `job_*_gate.json` now gets a verdict, and a wrong one stops your queue
+
+If your gate configs came from `./setup.sh` this section does not apply: the templates bake two
+absolute paths and no flags, and that shape has never been in question. If you wrote or edited one
+by hand, it is now parsed and judged, where in `0.5.1` it was not looked at at all.
+
+**Newly refused** — each of these launched before, ungated:
+
+- an interpreter path that does not exist or is not executable, and a bare interpreter name that is
+  not on `PATH`;
+- the hook script missing — whatever its shape (absolute, relative, or a **bare filename** such as
+  `python hook.py`, which is what a hand-written config most often carries) and whatever its suffix
+  (`.py`, `.sh`, `.js`, or none);
+- a path-shaped argument after the script that names nothing;
+- anything that cannot answer the probe, including a script that exists and crashes.
+
+**Deliberately not refused**, because a false red refuses to launch and a denial of service is not
+the safer failure:
+
+- wrapper launchers — `/usr/bin/env python3 hook.py`, `uv run hook.py`, `poetry run hook.py`,
+  and `VAR=value` prefixes — resolve through to the real script instead of convicting the wrapper;
+- value-taking short flags on a recognised interpreter (`python -W ignore`, `python -X faulthandler`,
+  `ruby -I lib`, `perl -I lib`, `bash -o pipefail`) no longer have their value read as the script;
+- a bare `--long-flag`'s value never claims the script role, so `--env-file .env`,
+  `--project pyproject.toml` and `--require ts-node/register` pass;
+- `~` is expanded in the interpreter position as well as in the arguments, so
+  `~/venv/bin/python hook.py` can pass at all;
+- URLs and glob patterns are not read as paths.
+
+There is no bypass switch, by design. The fix for a wrong verdict is an absolute path in the config,
+which is what `./setup.sh` writes.
+
+**Two known residuals, stated rather than left to be discovered.** Both fail open, both are the same
+undecidable question — is this token the script, or something the launcher ate: a bare extensionless
+script under an *unrecognised* launcher (`uv run gatehook`), and a script sitting immediately after a
+bare `--long-flag` in the three shape quadrants where real flag values live. The recognised
+interpreters, for which the first case is closed, are `python*`, `node`, `ruby`, `perl`, `bash`, `sh`
+and `zsh`. Both residuals are still covered by the smoke run for every interpreter that does not exit
+`2` on a missing script — `2` collides with the documented "the hook ran and blocked".
+
+### Fixed — the shipped test suite went red when you followed the README
+
+Adding a portal squad the way `README.md` documents it (`/add-team` plus two `/add-role`) turned the
+factory pytest suite red: a unit test asserted that the *live* roster ships no squads, so customising
+your own install failed a test about what this repo distributes. Reproduced before it was fixed —
+1 failed, 212 passed — and it persisted after the recipe's own final `/sync-roster`.
+
+The fact is real and still guarded; it just belongs against the **committed** roster rather than
+whatever is on your disk, so it moved into `test_release_invariants.sh` and reads
+`git show HEAD:standup/team.json`. The same judge had the mirror-image defect: it read the teammate
+definitions off disk, so a reader standing between the README's `/add-role` step and its
+`/sync-roster` step got failures for following the documentation *in order*. Both sides read
+committed blobs now. Where there is no committed blob to read — a tarball install with no `.git` —
+the run reports how many cases went unjudged instead of printing a clean pass on a question it
+never asked.
+
+### Fixed — the portal showed sample data to a backend that was merely slow
+
+The first-paint fallback fired at a flat 1200ms while a request aborts at 4000ms, so a backend that
+was alive and slow flashed the embedded sample roster at you before its real answer landed —
+measured between 1276ms and 2990ms on a status call that succeeded at 3s. The backstop is now
+derived from the request timeout, so it cannot pre-empt an answer that has not had time to fail. A
+genuinely dead backend still paints the fallback at 64ms; no blank screen was traded for the fix.
+
+That offline fallback also still named `demo_squad` and `demo-app`, deleted in `0.5.0`, and still
+described `design_lead` as pairing with a developer that no longer exists — 13 places across 5
+tokens. It now carries every staff id the shipped roster carries, `product_qa` included, and that
+completeness is a test rather than a habit.
+
+### Fixed — the first page still sold the sample that `0.5.0` deleted
+
+`README.md`'s opening still offered "the sample project it works on" and its quick start still said
+the command "runs the team on the bundled sample", two releases after the sample was removed — the
+first paragraph a trial user reads, and the exact sentence whose question the deletion was meant to
+answer. Step 4 of the quick start now says plainly that a fresh checkout **stops** there, before it
+spawns an agent, and names `/add-project` as the fix. Three further stale references were swept out
+of the `/init` row, a skill file and a governance hook.
+
+### Added — what a run costs, and how far `/costs` actually reaches
+
+A new [What it costs](README.md#what-it-costs) section, because the honest answer to "how do I spend
+less" was previously three observability commands. One task through the pipeline is sixteen agent
+turns and exactly one of them writes code; `/standup` adds a roster poll on top, which scales with
+the roster. The levers that genuinely reduce it are named, and so are the four that look like levers
+and are not.
+
+**The `/costs` reach is corrected rather than merely documented, and it is the part worth knowing.**
+No code changed here — this is what the controls always did:
+
+- the **daily cap** is enforced at exactly one call site, in the portal's job worker. It reaches
+  **portal jobs only**;
+- the **kill switch** is read there too, and in the `TaskCreated` and `TeammateIdle` hooks, so it
+  also hard-stops a **native `/team`** run;
+- **neither reaches `/standup` or `/work`.** Those run in your session through the Workflow tool,
+  and the engine consults neither control. The switch you are most likely to reach for does not stop
+  the run that spends the most.
+
+All three act at a boundary — a new job claim, a new task, a teammate going idle — so nothing
+force-kills an agent mid-turn; a switch thrown during a turn lands at the next boundary.
+
+### Added — three judges, and a harness that had been wired to nothing
+
+- **`test_version_consistency.sh`** — new. `.claude-plugin/plugin.json`,
+  `.claude-plugin/marketplace.json` and the newest `CHANGELOG.md` heading must all name the same
+  release. Nothing asserted this, in either direction, which is how a wrong version reached a commit
+  message during this release and was caught by hand rather than by a gate.
+- **`test_clock_independence.sh`** — new. The portal suite the README tells you to run was red for
+  roughly forty minutes a day: `guard()` refuses to launch near a scheduled tick by reading the real
+  local clock, and the fixture never pinned it. Every failing test asserted *allowed* and every
+  passing one asserted *blocked* — stuck closed, not flaky. A single-clock CI run can only catch
+  that by luck, so this one replays the suite across the day under POSIX `TZ` strings. A suite that
+  is red 40 minutes a day is worse than one that is red always: always-red gets fixed on the first
+  run, and sometimes-red teaches a new reader that failures are normal.
+- **`test_run_flag_clear.sh`** — new, and the other half of `test_arm_path.sh`: the exemption has to
+  be given back as well as taken. Its `--self-test` runs a pinned pre-`0.5.2` copy of `clear` and
+  requires the cases to reproduce the defect that shipped, rather than a mutation invented for the
+  occasion.
+- **`contract.frontend.test.js`** — the only test that actually *executes* `static/app.js` was
+  referenced by nothing, not CI and not the README, while source-text judges were being added around
+  the same file. It is wired into both now.
+
+All four are in the README `Tests` list and in CI, which run the same set.
+
+### Fixed — `team_run_flag.sh clear` was unreachable in a tree with concurrent runs
+
+`clear <run-id>` refused whenever *any* other run's record was present, and there was no per-record
+delete — so in any tree that has ever had two overlapping runs the flag file only grew and `clear`
+could never succeed again, leaving `--force` (which unlinks the flag under whatever else is running)
+as the only exit. It now removes just the caller's own record, keeps the file while other records
+remain, and unlinks it only when the last record goes. Records are matched on the run-id **field**,
+not as a substring, so a run whose id is a prefix of another's no longer deletes both. The refusal
+to switch the gate back on under a live run is unchanged, and the 6h TTL — not `clear` — is still
+the real backstop, since a crashed run never reaches its teardown.
+
+### Notes
+
+- `hooks/supervisor_gate.py` and `skills/add-project/SKILL.md` no longer describe the deleted
+  bundled sample in their rationale. Behaviour is unchanged.
+- The gate's fail-open premise is pinned by an end-to-end test that ships with no trigger, because a
+  distributable cannot own a nightly routine; its docstring says when to run it.
+
 ## [0.5.1] — 2026-08-07
 
 **0.5.0 shipped with one command that could not run and two guards that were only prose. Every

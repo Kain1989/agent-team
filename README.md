@@ -456,11 +456,13 @@ node standup/control/verify_design_quality.js --self-test                 # the 
 node standup/control/check_workflow_parse.js standup/standup.workflow.js  # the engine still loads
 node standup/control/tests/test_sdlc_routing.js                           # both entry paths still reach intake
 bash standup/control/tests/test_arm_path.sh                              # the exemption is armed in THIS install, not a neighbour
+bash standup/control/tests/test_run_flag_clear.sh                        # ...and can be given back in a tree with concurrent runs
 bash standup/control/tests/test_eval_resolver.sh                         # /eval says which cases it skipped, and why
 bash standup/control/tests/test_add_project.sh                          # /add-project's four invariants are checkable
 bash standup/control/tests/test_remove_project.sh                       # /remove-project edits surgically and keeps your code
 bash standup/control/tests/test_supervisor_gate.sh                      # the gate still blocks product work and allows management
 bash standup/control/tests/test_release_invariants.sh                   # what ships is consistent with itself
+bash standup/control/tests/test_version_consistency.sh                  # the release names itself the same in all three places
 bash standup/control/tests/test_clock_independence.sh                   # the portal suite passes at every hour, not just convenient ones
 ```
 
@@ -475,7 +477,7 @@ renders the same payload through the pre-fix producer shape and requires the car
 both went stale the first time a judge was added, which is the same rot the paragraph below is
 about.)
 
-Three of them are newer and worth saying what they are for. `test_supervisor_gate.sh` covers
+Several are newer and worth saying what they are for. `test_supervisor_gate.sh` covers
 `hooks/supervisor_gate.py` — the one mechanism separating "the EM supervises" from "the EM writes
 the product" — which had no test of any kind, while `verify_project.py` derives its deny list from
 that file's constants. `test_release_invariants.sh` judges the CONTENT of the release rather than
@@ -483,10 +485,20 @@ its behaviour: that no instructional document prints an `/add-project` invocatio
 refuses, and that the `.claude/agents/*.md`, the roster and the portal's off-disk mock this repo
 **ships** are consistent with each other. Two of those shipped broken in 0.5.0 — a documented
 `/add-project` the command refuses, and tracked teammate definitions `/sync-roster` would have
-pruned — and no other judge could see either. Every case that judges the release reads the
+pruned — and no other judge could see either. Every case in *that* judge reads the
 **committed** blob, never your working tree — customising your own install must never redden the
 shipped suite — and when there is no committed blob to read (a tarball install with no `.git`) the
 run says so in its summary rather than reporting a clean pass on a question it never asked.
+
+`test_version_consistency.sh` guards the one fact this project states in three places at once:
+`.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` and the newest `CHANGELOG.md`
+heading must name the same release. Nothing asserted that in either direction, which is how a wrong
+version reached a commit message during 0.5.2 and was caught by hand rather than by a gate — and a
+published manifest is the worst place to find out, because an install has already been served the
+wrong number. This one deliberately reads your **working tree** rather than the committed blob: the
+three files are repo-owned, nobody customises them on their own install, and the mistake it exists
+to catch is in the tree you are about to commit, so reading `HEAD` would make it blind exactly when
+it is needed.
 
 `test_clock_independence.sh` is the odd one out: it judges the SUITE rather than the product. The
 first command in that list reads the local wall clock, through `guard()`'s refusal to launch when a

@@ -25,8 +25,31 @@
 # its teardown.
 #
 # CONCURRENCY: several runs may share one flag. `set` APPENDS a record and refreshes the mtime
-# rather than overwriting, and `clear` REFUSES to delete while another run's record is present.
-# Rule of thumb: if any run may still be alive, do not delete it.
+# rather than overwriting. `clear <run-id>` removes THAT RUN'S OWN record and unlinks the file only
+# when the last record goes; while any other run's record remains it keeps the file and exits
+# non-zero. Rule of thumb: if any run may still be alive, do not delete the FILE.
+#
+# WHY `clear` HAD TO CHANGE. There was no per-record delete at all: it refused outright whenever any
+# other record was present, so the caller's own record was never removed and the file only ever
+# grew. In a tree that has seen two overlapping runs that made `clear` PERMANENTLY unreachable,
+# leaving `--force` — which unlinks the flag under whatever else is still running — as the only exit.
+# That is the one outcome this command exists to prevent, so the safe path has to be the reachable
+# one. The install this was distilled from had accumulated 30+ records exactly that way.
+#
+# Records are matched on the run-id FIELD, trimmed and compared exactly. The old test was
+# `grep -v -- "$RUN"`, wrong twice over: it matched a SUBSTRING anywhere on the line, and it read
+# the id as a REGEX. A run whose id contains another's (`nightly` vs `nightly-2`) could therefore
+# hide the other's record from the "is anyone else here" question and then delete the flag out from
+# under a live run — the precise accident the refusal exists to stop.
+#
+# A run-id is now REQUIRED. `clear` with no id used to fall through to `rm -f`: a silent `--force`
+# for anyone who mistyped the command.
+#
+# The rewrite is tmp+rename, so a concurrent reader never sees a half-written file, and it RESTORES
+# the original mtime — the gate expires the flag 6h after mtime and a teardown must not push that
+# deadline out. Known and accepted: a `set` landing between the read and the rename is lost. It
+# costs that run its LISTING, not its exemption (the gate keys on the file existing, not on the
+# records), and the 6h TTL, not `clear`, is the real backstop either way.
 #
 # Usage:
 #   standup/control/team_run_flag.sh set   <run-id> [note]
@@ -38,6 +61,27 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FLAG="$HERE/team_run_active"
 CMD="${1:-status}"
 RUN="${2:-}"
+
+# Split the flag's records by whether they belong to <run-id>.
+#
+# A record is `<utc-timestamp> | <run-id> | <note>`, so the id is FIELD 2 — trimmed, and compared
+# for EQUALITY. `-F'|'` is a single literal character on purpose: a multi-character -F is an ERE and
+# the backslash escaping needed to express one differs between awk implementations, which is not a
+# thing a safety check should depend on.
+#
+# A line carrying no `|` at all (a hand-edited or truncated file) yields an empty field 2, so it is
+# never equal to a real run-id and always counts as SOMEONE ELSE'S. That is deliberate: the failure
+# this whole command guards is deleting a record you did not understand.
+_records() { # <run-id> mine|others  -> prints the matching records
+  awk -F'|' -v run="$1" -v want="$2" '
+    {
+      f = $2
+      gsub(/^[ \t]+/, "", f)
+      gsub(/[ \t]+$/, "", f)
+      if ((f == run) == (want == "mine")) print
+    }
+  ' "$FLAG"
+}
 
 case "$CMD" in
   set)
@@ -51,18 +95,46 @@ case "$CMD" in
     ;;
   clear)
     [ -f "$FLAG" ] || { echo "team_run_active already absent"; exit 0; }
-    if [ -n "$RUN" ] && [ "${3:-}" != "--force" ]; then
-      others=$(grep -v -- "$RUN" "$FLAG" || true)
-      if [ -n "$others" ]; then
-        echo "REFUSING to clear — another run still holds the exemption:" >&2
-        echo "$others" | sed 's/^/  /' >&2
-        echo "(clearing it would switch the gate back ON mid-run and block every write that run" >&2
-        echo " still has to make. Pass --force only once you have confirmed those runs are dead.)" >&2
+    if [ -z "$RUN" ] || [ "${RUN#--}" != "$RUN" ]; then
+      echo "usage: team_run_flag.sh clear <run-id> [--force]" >&2
+      echo "  A run-id is REQUIRED: clear removes the CALLER'S OWN record, and without one there is" >&2
+      echo "  no such record to remove. Omitting it used to delete the whole file — a silent --force." >&2
+      exit 2
+    fi
+    if [ "${3:-}" = "--force" ]; then
+      rm -f "$FLAG"
+      echo "team_run_active CLEARED (--force: the whole file, including every other run's record)"
+      exit 0
+    fi
+    mine="$(_records "$RUN" mine)"
+    others="$(_records "$RUN" others)"
+    if [ -z "$others" ]; then
+      rm -f "$FLAG"
+      echo "team_run_active CLEARED (last record was $RUN)"
+      exit 0
+    fi
+    # Other runs are still holding the exemption, so the FILE stays. The caller's own record does
+    # not: leaving it is what made this command unreachable in every shared tree.
+    if [ -n "$mine" ]; then
+      tmp="$(mktemp "${FLAG}.clear.XXXXXX")"
+      if _records "$RUN" others > "$tmp"; then
+        touch -r "$FLAG" "$tmp"   # keep the ORIGINAL mtime: a teardown must not extend the 6h TTL
+        mv "$tmp" "$FLAG"
+        echo "released this run's record ($RUN)"
+      else
+        rm -f "$tmp"
+        echo "could not rewrite $FLAG — left exactly as it was" >&2
         exit 1
       fi
+    else
+      echo "no record for '$RUN' in team_run_active — nothing of yours to release" >&2
     fi
-    rm -f "$FLAG"
-    echo "team_run_active CLEARED"
+    echo "REFUSING to delete the flag — $(printf '%s\n' "$others" | wc -l | tr -d ' ') other record(s) still hold the exemption:" >&2
+    printf '%s\n' "$others" | sed 's/^/  /' >&2
+    echo "(deleting it would switch the gate back ON mid-run and block every write those runs still" >&2
+    echo " have to make. The gate's own 6h TTL is the backstop; pass --force only once you have" >&2
+    echo " confirmed they are dead.)" >&2
+    exit 1
     ;;
   status)
     if [ -f "$FLAG" ]; then

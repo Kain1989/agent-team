@@ -68,11 +68,18 @@ jobs:
         # not a judge (E-03). Several of these caught a real defect in their own logic the first
         # time they were pointed at the tree; the two project judges had theirs found in review
         # instead, which is recorded as a known gap in CHANGELOG 0.4.0.
+        # test_run_flag_clear.sh is arm_path's other half: the exemption also has to be GIVEN BACK.
+        # `clear` refused whenever any other run held a record and had no per-record delete, so in
+        # any tree that had seen two overlapping runs it could never succeed again and --force —
+        # which unlinks the flag under whatever is still running — was the only way out. Its
+        # --self-test runs a pinned PRE-FIX copy of `clear` and requires the cases to reproduce that.
         run: |
           bash standup/control/tests/test_eval_resolver.sh --self-test
           bash standup/control/tests/test_eval_resolver.sh
           bash standup/control/tests/test_arm_path.sh --self-test
           bash standup/control/tests/test_arm_path.sh
+          bash standup/control/tests/test_run_flag_clear.sh --self-test
+          bash standup/control/tests/test_run_flag_clear.sh
           bash standup/control/tests/test_add_project.sh --self-test
           bash standup/control/tests/test_add_project.sh
           bash standup/control/tests/test_remove_project.sh --self-test
@@ -85,11 +92,17 @@ jobs:
         # than its behaviour (a documented command that the command refuses; tracked teammate
         # definitions that /sync-roster would prune); both shipped broken in 0.5.0 with every
         # other judge green.
+        # The version judge is the same family and the same shape of hole: plugin.json,
+        # marketplace.json and the newest CHANGELOG heading all declare the release and NOTHING
+        # compared them, which is how a wrong version reached a commit message during 0.5.2 —
+        # caught by hand, before push, by luck. A published manifest cannot be un-served.
         run: |
           bash standup/control/tests/test_supervisor_gate.sh --self-test
           bash standup/control/tests/test_supervisor_gate.sh
           bash standup/control/tests/test_release_invariants.sh --self-test
           bash standup/control/tests/test_release_invariants.sh
+          bash standup/control/tests/test_version_consistency.sh --self-test
+          bash standup/control/tests/test_version_consistency.sh
 
       - name: Design judge self-test
         # DESIGN_RULEBOOK E-03: prove the judge FAILS on deliberately broken UI. A design gate
