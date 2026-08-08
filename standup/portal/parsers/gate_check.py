@@ -73,7 +73,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
-from typing import Dict, List, Union
+from typing import Dict, List, Tuple, Union
 
 PathLike = Union[str, "os.PathLike[str]"]
 
@@ -243,10 +243,59 @@ _GLOB_CHARS = "*?["
 # from being mistaken for the script (see the scan below).
 #
 # This is NOT a return to `arg.endswith(".py")`. That test was the ONLY signal and was applied
-# to EVERY argument, so it certified a missing `hook.sh` as fine. Here a suffix is one of two
-# signals (a separator is the other) and it is consulted for ONE argument — the interpreter's
-# script — where the alternative is not "check less" but "guess".
+# to EVERY argument, so it certified a missing `hook.sh` as fine. Here a suffix is one of three
+# signals — a separator and the INTERPRETER'S IDENTITY are the others — and it is consulted for
+# ONE argument, the interpreter's script, where the alternative is not "check less" but "guess".
 _FILE_SUFFIX = re.compile(r"\.[A-Za-z][A-Za-z0-9]{0,7}$")
+
+# argv[0] is not always the interpreter. `env` is a launcher: `/usr/bin/env python3 <s>` and
+# `env PYTHONPATH=/x python3 <s>` both run python, and the tokens in between belong to `env`.
+# Stepping through them is what makes the identity rule below usable at all — and it is also
+# what stops `PYTHONPATH=/x` from being read as a path and reported as a missing script, which
+# it was: a separator inside a variable ASSIGNMENT is not a separator inside a filename.
+_ENV_LAUNCHER = "env"
+_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+# Interpreters whose argv grammar we are willing to ASSERT rather than infer from shape. Each
+# takes a SCRIPT PATH as its first positional and has no subcommands, so for these POSITION
+# alone identifies the script: `python gatehook` can only mean the file `gatehook`, there being
+# no `gatehook` subcommand for it to be. That is what lets a bare extensionless name be checked
+# here while staying unchecked under `uv`/`poetry`/a custom launcher, where the same token
+# really might be a subcommand.
+#
+# The list is deliberately short, and short in the SAFE direction: anything not on it falls
+# through to the shape rule, so an interpreter missing from it costs a fail-open, while a
+# LAUNCHER wrongly added to it would cost a false RED on a working config — and a false RED
+# refuses to launch, which is an outage.
+_SCRIPT_TAKING_INTERPRETER = re.compile(r"^(python[0-9.]*|node|ruby|perl|bash|sh|zsh)$")
+
+# A flag that might still EAT the token after it, which is what makes that token ambiguous
+# between "the flag's value" and "the script". Excluded, because none of them shield what
+# follows: `--flag=value` already carries its value, `--` is the end-of-options separator, and
+# a lone `-` means stdin.
+_BARE_FLAG = re.compile(r"^-{1,2}[^-=][^=]*$")
+# ...and of those, the LONG ones. The distinction is load-bearing, not cosmetic — see rules 2
+# and 3 in `_interpreter_problem`.
+_BARE_LONG_FLAG = re.compile(r"^--")
+
+
+def _effective_interpreter(argv: List[str]) -> Tuple[int, str]:
+    """`(index, basename)` of the token that actually runs the hook.
+
+    Usually argv[0]. Under `env` it is the first token that is neither a `VAR=VALUE`
+    assignment nor a flag. `env`'s OWN flags (`-i`, `-u NAME`, `-S`) have a grammar of their
+    own, so on meeting one we stop and hand the rest back to the shape rule rather than guess.
+    The result is then exactly the previous behaviour, which is the safe direction to be wrong
+    in: less asserted, never more.
+    """
+    i = 0
+    if os.path.basename(argv[0]) == _ENV_LAUNCHER:
+        j = 1
+        while j < len(argv) and _ASSIGNMENT.match(argv[j]):
+            j += 1
+        if j < len(argv) and not argv[j].startswith("-"):
+            i = j
+    return i, os.path.basename(argv[i])
 
 
 def _resolves(arg: str) -> bool:
@@ -334,28 +383,72 @@ def _interpreter_problem(command: str) -> str:
     #     missing bare `hook.py` came back with NO PROBLEMS — certified healthy, gate gone.
     #
     #     Tokens before the script that cannot name a file are stepped over rather than
-    #     consumed, so a wrapper launcher still resolves: `/usr/bin/env python3 /x/hook.py`
-    #     skips `python3` and tests `/x/hook.py`; `uv run hook.py` skips `run`. Taking the
-    #     first non-flag token unconditionally would have failed both — it would report
-    #     `python3` as a missing script and stop the queue on a working config, and a false
-    #     BROKEN is a denial of service.
+    #     consumed, so a wrapper launcher still resolves: `uv run hook.py` skips `run`.
+    #     Taking the first non-flag token unconditionally would report `run` as a missing
+    #     script and stop the queue on a working config, and a false BROKEN is a denial of
+    #     service. Three rules decide whether a pre-script token may CLAIM the script role,
+    #     and they are one set, not a stack of patches — each exists to stop the next one
+    #     over-reaching:
     #
-    #     KNOWN RESIDUAL, stated rather than discovered later: a script that is BOTH bare and
-    #     extensionless (`python gatehook`) is indistinguishable from a subcommand, so it is
-    #     not tested. Guessing there can only trade this module's fail-open for a fail-closed
-    #     on someone's working config.
+    #       1. IDENTITY. If the effective interpreter (`_effective_interpreter`, which steps
+    #          through `env` and `VAR=VALUE`) is one we recognise, its first positional IS the
+    #          script by that interpreter's own grammar — checked whatever its shape, which is
+    #          what closes `python gatehook`. Under an unrecognised launcher, shape still has
+    #          to decide, because there `gatehook` may genuinely be a subcommand.
+    #       2. A BARE `--long-flag`'s VALUE never claims the role. On real configs that
+    #          position holds `--env-file .env`, `--project pyproject.toml`,
+    #          `--require ts-node/register`, and convicting those refuses to launch three
+    #          working commands. Ambiguity is resolved toward fail-OPEN deliberately: this
+    #          module REFUSES TO LAUNCH on a red, so a wrong red is an outage while a wrong
+    #          green leaves the smoke run and every other layer still standing.
+    #       3. A BARE SHORT flag's value may claim the role, but only on a file EXTENSION.
+    #          Short flags on these interpreters overwhelmingly take no value (`-u -B -O -E
+    #          -I -q -v`), so the token after one usually IS the script — refusing it would
+    #          reopen `python -u hook.py`. But a separator alone must not be enough, because
+    #          a separator is exactly what the values that DO exist carry (`-r
+    #          ts-node/register`, `-I lib/foo`) — those are module and directory specifiers,
+    #          not scripts.
+    #
+    #     KNOWN RESIDUAL, stated rather than discovered later. TWO shapes, both fail-OPEN,
+    #     both the same undecidable question — "is this token the script, or something the
+    #     launcher ate?" — and both preferred to the alternative, which is a false RED:
+    #
+    #       (a) A bare EXTENSIONLESS script under an UNRECOGNISED launcher (`uv run gatehook`)
+    #           is indistinguishable from that launcher's subcommand. Rule 1 closes this for
+    #           every interpreter on the list; closing it for an arbitrary wrapper would need
+    #           a per-wrapper flag table, which is a maintenance burden that rots silently.
+    #       (b) A script sitting immediately after a bare `--long-flag`
+    #           (`uv run --env-file gate.py`) is denied the role by rule 2, so it is not
+    #           path-checked. It is still SMOKE-run, and for most interpreters that is enough.
+    #           Measured here, each handed one missing script:
+    #
+    #               python 2 · perl 2 · node 1 · ruby 1 · bash 127 · sh 127 · zsh 127
+    #
+    #           Only the two that exit **2** fail open, because 2 is the documented "the hook
+    #           ran and blocked" — which is the same collision Finding A turned on. The rest
+    #           still fail closed, just with a less precise message than a named path.
     #
     #   * THE HOOK'S OWN ARGUMENTS — after the script. Here we genuinely cannot know which
     #     flags take values (`-u` does not, `--root` does), so only PATH-SHAPED tokens are
     #     tested, and a missing one is still a broken config whatever position it sits in.
+    #     Rules 2 and 3 are scoped to the SCRIPT role and deliberately do not apply here: this
+    #     region's residual runs the other way, cry-wolf rather than fail-open —
+    #     `<script> --require ts-node/register` is reported missing. Pre-existing, unchanged,
+    #     and the reason it is tolerated is that a hook's own path argument that does not
+    #     resolve is far more often a real broken config than a module specifier.
     #
-    # Excluded from both roles, because they carry a separator while naming nothing: URLs,
+    # Excluded from every role, because they carry a separator while naming nothing: URLs,
     # globs, and tokens that still contain whitespace after `shlex` (see `_cannot_be_a_path`).
     # Flags are skipped, and the token after `-c`/`-m` is source or a module name — skipped,
     # and it also settles the question of where the script is: there isn't one.
+    interp_index, interp_name = _effective_interpreter(argv)
+    known_interpreter = bool(_SCRIPT_TAKING_INTERPRETER.match(interp_name))
+
     script_found = False
     skip_next = False
-    for arg in argv[1:]:
+    after_flag = ""  # the bare flag immediately before this token, "" if there wasn't one
+    for arg in argv[interp_index + 1:]:
+        preceding_flag, after_flag = after_flag, ""
         if skip_next:
             skip_next = False
             continue
@@ -363,11 +456,21 @@ def _interpreter_problem(command: str) -> str:
             if arg in _NO_SCRIPT_FLAGS:
                 skip_next = True
                 script_found = True  # `-c`/`-m`: the program is not a file; stop looking
+            elif _BARE_FLAG.match(arg):
+                after_flag = arg
             continue
         if _cannot_be_a_path(arg):
             continue
         if not script_found:
-            if _looks_like_a_path(arg) or _FILE_SUFFIX.search(arg):
+            if preceding_flag and _BARE_LONG_FLAG.match(preceding_flag):
+                continue                                            # rule 2
+            elif preceding_flag:
+                claims_script = bool(_FILE_SUFFIX.search(arg))       # rule 3
+            else:
+                claims_script = (known_interpreter                   # rule 1
+                                 or _looks_like_a_path(arg)
+                                 or bool(_FILE_SUFFIX.search(arg)))
+            if claims_script:
                 script_found = True
                 if not _resolves(arg):
                     return _missing_path(arg)

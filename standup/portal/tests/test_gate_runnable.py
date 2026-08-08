@@ -428,22 +428,53 @@ def test_bare_missing_script_is_named_and_a_real_exit_2_block_still_passes(tmp_p
         _write_gate(tmp_path, f"{sys.executable} {blocker}", name="blocker.json")) == []
 
 
+NOTHING = re.compile(r"(?!)")  # a regex that matches nothing — the standard neutraliser here
+
+
 def test_bare_script_check_rejects_the_shape_only_rule(tmp_path, monkeypatch):
     """E-03 for the half above: restore the pre-fix rule and the lie must come back.
 
     The old rule was "path-shaped or not a path at all", under which a bare filename is never a
-    candidate. Blanking the filename-suffix signal restores exactly that classification, and the
-    SAME config must then be certified healthy again — otherwise the assertion above is only
-    proving that this box happens to have no `__no_such_gate_hook__.py` lying around.
+    candidate. The SAME config must then be certified healthy again — otherwise the assertion
+    above is only proving that this box happens to have no `__no_such_gate_hook__.py` lying
+    around.
+
+    TWO mechanisms have to be neutralised now, and the reason is worth keeping: blanking the
+    filename-suffix signal alone no longer restores the pre-fix classification, because the
+    interpreter-identity rule claims the bare token on POSITION regardless of its shape. That
+    is not the mutation going stale — it is the identity rule being load-bearing, which
+    `test_bare_extensionless_script_is_named_under_a_known_interpreter` pins from the other
+    side. A mutation that stops reproducing the bug must be widened, never deleted.
     """
     import sys
 
     command = f"{sys.executable} {BARE_MISSING}"
-    monkeypatch.setattr(gate_check, "_FILE_SUFFIX", re.compile(r"(?!)"))  # matches nothing
+    monkeypatch.setattr(gate_check, "_FILE_SUFFIX", NOTHING)
+    assert gate_check._interpreter_problem(command) != "", (
+        "blanking the suffix signal alone stopped reporting it — the identity rule below is "
+        "what covers this now, and this assertion is how we notice if it stops")
+
+    monkeypatch.setattr(gate_check, "_SCRIPT_TAKING_INTERPRETER", NOTHING)
     assert gate_check._interpreter_problem(command) == "", (
         "the mutation did not restore the pre-fix classification")
     assert gate_config_problems(_write_gate(tmp_path, command, name="bare.json")) == [], (
         "the pre-fix rule did not reproduce the fail-open, so the case above proves nothing")
+
+
+def _fake_launcher(tmp_path, name):
+    """An executable that only has to EXIST — argv[0] is checked, never run, by these tests.
+
+    Needed because the wrapper shapes have to be judged with a WRAPPER at argv[0]. They used
+    to be written with `{py}` standing in for `uv`, which was fine while shape was the only
+    signal and became wrong the moment the interpreter's IDENTITY became one: `python run
+    hook.py` does not mean what `uv run hook.py` means — CPython has no `run` subcommand, so
+    there `run` really is the script, and reporting it missing is correct rather than
+    cry-wolf. A stand-in that no longer stands for the same thing tests the wrong command.
+    """
+    exe = tmp_path / name
+    exe.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    exe.chmod(0o755)
+    return exe
 
 
 @pytest.mark.parametrize("command", [
@@ -451,8 +482,10 @@ def test_bare_script_check_rejects_the_shape_only_rule(tmp_path, monkeypatch):
     "{py} -m json.tool",                                           # a module, not a path
     "{py} -u {script}",                                            # a flag that takes no value
     "{py} {script} --verbose",                                     # a valueless flag after it
-    "{py} run {script}",            # a wrapper's SUBCOMMAND before the script (`uv run hook.py`)
-    "{py} python3 {script}",        # a nested INTERPRETER before it (`/usr/bin/env python3 …`)
+    "{uv} run {script}",            # a wrapper's SUBCOMMAND before the script (`uv run hook.py`)
+    "/usr/bin/env python3 {script}",              # a nested INTERPRETER before it
+    "{py} -W ignore {script}",      # a SHORT flag that DOES take a value, then the script
+    "{py} -X faulthandler {script}",
 ])
 def test_interpreter_check_does_not_cry_wolf(tmp_path, command):
     """The other half: a checker that flags well-formed commands gets switched off.
@@ -461,16 +494,230 @@ def test_interpreter_check_does_not_cry_wolf(tmp_path, command):
     arbitrary text that can contain a `/`, so their values are skipped rather than read as
     paths.
 
-    The last two guard the rule above from the obvious over-correction. "The first non-flag
-    token is the script" would report `run` and `python3` as missing scripts and refuse to
-    launch a working gate — and a false BROKEN stops the queue, which is its own outage.
-    A token that cannot name a file is stepped over, not consumed.
+    The wrapper and `env` shapes guard the rule above from the obvious over-correction. "The
+    first non-flag token is the script" would report `run` and `python3` as missing scripts and
+    refuse to launch a working gate — and a false BROKEN stops the queue, which is its own
+    outage. A token that cannot name a file is stepped over, not consumed; under `env` the
+    interpreter is identified and the walk starts after it.
+
+    The last two are the price of the interpreter-identity rule: under a RECOGNISED interpreter
+    the first positional is claimed whatever its shape, so a short flag's value (`-W ignore`,
+    `-X faulthandler`) would be convicted as a missing script unless a flag's value is barred
+    from claiming the role. `ignore` naming nothing is not a broken gate.
     """
     import sys
     script = tmp_path / "hook.py"
     script.write_text(DECIDING_HOOK, encoding="utf-8")
-    resolved = command.format(py=sys.executable, script=script)
+    resolved = command.format(py=sys.executable, script=script,
+                              uv=_fake_launcher(tmp_path, "uv"))
     assert gate_check._interpreter_problem(resolved) == "", resolved
+
+
+# --------------------------------------------------------------------------------------- #
+# WHICH TOKEN IS THE SCRIPT: three rules, and each one exists to stop the next over-reaching.
+#
+#   1. IDENTITY — under an interpreter we RECOGNISE, the first positional is the script by that
+#      interpreter's own grammar, whatever its shape. This is the one that closes a bare
+#      EXTENSIONLESS name; shape alone can never, because `gatehook` and a wrapper's
+#      subcommand are the same string.
+#   2. A bare `--long-flag`'s VALUE never claims the role. Rule 1 without this convicts
+#      `--env-file .env` and `--project pyproject.toml` — two commands that WORK — and a false
+#      RED refuses to launch the queue, which is an outage rather than a safety win.
+#   3. A bare SHORT flag's value may claim it, but only on a file EXTENSION. Rule 2 extended to
+#      short flags would un-check `python -u hook.py`, reopening the hole Finding A closed; but
+#      a SEPARATOR must not be enough either, because that is what the values which do exist
+#      carry (`-r ts-node/register`).
+#
+# Every case below is judged with the right thing at argv[0]: a wrapper for the wrapper shapes,
+# a real interpreter for the interpreter shapes. Judging a wrapper shape with python at argv[0]
+# is what the fixture above stopped doing, and is now itself a different command.
+# --------------------------------------------------------------------------------------- #
+BARE_MISSING_EXTENSIONLESS = "__no_such_gatehook__"
+
+
+def test_bare_extensionless_script_is_named_under_a_known_interpreter(tmp_path):
+    """RULE 1. `python gatehook` can only mean the FILE `gatehook` — CPython has no subcommands.
+
+    Documented as a residual until now, and correctly so while shape was the only signal. What
+    changed is not the tolerance for guessing but the amount that has to be guessed: POSITION
+    under a NAMED interpreter is not a guess. The message matters as much as the verdict —
+    without the path check the smoke run reports this as `EXITS 2`, which is the documented
+    "the hook ran and blocked" and sends the reader to the hook's logic instead of to the file
+    that is not there.
+    """
+    import sys
+
+    assert not os.path.exists(BARE_MISSING_EXTENSIONLESS), "precondition: it must not resolve"
+    problem = gate_check._interpreter_problem(
+        f"{sys.executable} {BARE_MISSING_EXTENSIONLESS}")
+    assert "hook script does not exist" in problem, problem
+    assert BARE_MISSING_EXTENSIONLESS in problem, problem
+
+    problems = gate_config_problems(_write_gate(
+        tmp_path, f"{sys.executable} {BARE_MISSING_EXTENSIONLESS}", name="extless.json"))
+    assert any("hook script does not exist" in p for p in problems), problems
+    assert not any("EXITS 2" in p for p in problems), problems
+
+
+def test_bare_extensionless_check_rejects_the_pre_identity_rule(monkeypatch):
+    """E-03 for rule 1: with no interpreter recognised, the documented fail-open comes back."""
+    import sys
+
+    monkeypatch.setattr(gate_check, "_SCRIPT_TAKING_INTERPRETER", NOTHING)
+    assert gate_check._interpreter_problem(
+        f"{sys.executable} {BARE_MISSING_EXTENSIONLESS}") == "", (
+        "the pre-fix rule did not reproduce the fail-open, so the case above proves nothing")
+
+
+def test_the_identity_rule_sees_through_the_env_launcher(tmp_path):
+    """RULE 1 again, one layer down: `env` is a launcher, so argv[0] is not the interpreter.
+
+    Without stepping through it the recognised name is `env`, nothing is asserted, and the
+    shape rule decides — which is the same fail-open, reached by a different road. Worse, a
+    walk that started at argv[1] regardless would read `python3` itself as the script and
+    report a WORKING command broken.
+    """
+    problem = gate_check._interpreter_problem(
+        f"/usr/bin/env python3 {BARE_MISSING_EXTENSIONLESS}")
+    assert "hook script does not exist" in problem, problem
+    assert BARE_MISSING_EXTENSIONLESS in problem, problem
+    assert "python3" not in problem, f"the interpreter was mistaken for the script: {problem}"
+
+
+def test_env_step_through_check_rejects_the_unstepped_launcher(monkeypatch):
+    """E-03 for the step-through: stop recognising `env` and the case above must go quiet."""
+    monkeypatch.setattr(gate_check, "_ENV_LAUNCHER", "__not_env__")
+    assert gate_check._interpreter_problem(
+        f"/usr/bin/env python3 {BARE_MISSING_EXTENSIONLESS}") == "", (
+        "the mutation did not reproduce the unstepped launcher")
+
+
+MISSING_ASSIGNMENT = "PYTHONPATH=/no/such/lib"
+
+
+def test_the_identity_rule_sees_through_variable_assignments(tmp_path):
+    """RULE 1, two layers down: `env VAR=1 python3 <hook>` still runs python.
+
+    Separate from the `env` case above and not folded into it: they are neutralised by
+    different constants, and a case whose only covering mutation also reddens something else
+    is a case nobody has actually watched fail on its own.
+    """
+    problem = gate_check._interpreter_problem(
+        f"/usr/bin/env {MISSING_ASSIGNMENT} python3 {BARE_MISSING_EXTENSIONLESS}")
+    assert "hook script does not exist" in problem, problem
+    assert BARE_MISSING_EXTENSIONLESS in problem, problem
+
+
+def test_assignment_step_through_check_rejects_the_pre_fix_rule(monkeypatch):
+    """E-03: stop recognising assignments and the interpreter behind them is lost again."""
+    monkeypatch.setattr(gate_check, "_ASSIGNMENT", NOTHING)
+    assert gate_check._interpreter_problem(
+        f"/usr/bin/env {MISSING_ASSIGNMENT} python3 {BARE_MISSING_EXTENSIONLESS}") == "", (
+        "the mutation did not reproduce the pre-fix classification")
+
+
+def test_a_variable_assignment_is_not_read_as_a_missing_script(tmp_path):
+    """`env PYTHONPATH=/x python3 <hook>` is a working command, and was reported broken.
+
+    A separator inside an ASSIGNMENT is not a separator inside a filename, but the walk saw
+    only the slash — so it convicted the assignment, named it as the hook script, and refused
+    to launch. Cry-wolf on a shape a hook that lives in a venv genuinely uses.
+    """
+    script = tmp_path / "hook.py"
+    script.write_text(DECIDING_HOOK, encoding="utf-8")
+    command = f"/usr/bin/env {MISSING_ASSIGNMENT} python3 {script}"
+    assert not os.path.exists("/no/such/lib"), "precondition: the value must not resolve"
+    assert gate_check._interpreter_problem(command) == "", command
+
+
+def test_assignment_not_convicted_check_rejects_the_pre_fix_rule(tmp_path, monkeypatch):
+    """E-03: walk from argv[1] regardless — the pre-fix shape — and it is convicted again."""
+    script = tmp_path / "hook.py"
+    script.write_text(DECIDING_HOOK, encoding="utf-8")
+    monkeypatch.setattr(gate_check, "_ENV_LAUNCHER", "__not_env__")
+    problem = gate_check._interpreter_problem(
+        f"/usr/bin/env {MISSING_ASSIGNMENT} python3 {script}")
+    assert "hook script does not exist" in problem, (
+        "the pre-fix rule flagged nothing, so the case above proves nothing")
+    assert MISSING_ASSIGNMENT in problem, problem
+
+
+# The two shapes the merge gate measured going newly RED, plus the one that was red already.
+# Each value is RELATIVE or a module specifier, which is the whole difficulty: it is resolved
+# against the CALLER's cwd, not the hook's, so it legitimately names nothing from here.
+_FLAG_VALUES = {
+    "env-file": ("--env-file", ".env"),
+    "project": ("--project", "pyproject.toml"),
+    "require": ("--require", "ts-node/register"),
+}
+
+
+def _wrapper_command(tmp_path, flag, value):
+    """`<launcher> run <flag> <value> <script>` — the script is real and resolves."""
+    script = tmp_path / "hook.py"
+    script.write_text(DECIDING_HOOK, encoding="utf-8")
+    return f"{_fake_launcher(tmp_path, 'uv')} run {flag} {value} {script}"
+
+
+@pytest.mark.parametrize("shape", list(_FLAG_VALUES))
+def test_a_long_flags_value_does_not_claim_the_script_role(tmp_path, monkeypatch, shape):
+    """RULE 2. Three WORKING commands that this module refused to launch.
+
+    `cwd` is repointed at `tmp_path` deliberately: these values are relative, so whether they
+    resolve depends on where the check runs from. Measured from this repo's root, which ships a
+    `.env`, the `env-file` case comes back green for a reason that has nothing to do with the
+    rule under test — a fixture that passes because of the developer's directory is not
+    evidence, so the precondition below pins it.
+    """
+    monkeypatch.chdir(tmp_path)
+    flag, value = _FLAG_VALUES[shape]
+    assert not os.path.exists(value), f"precondition: {value!r} must not resolve from here"
+    command = _wrapper_command(tmp_path, flag, value)
+    assert gate_check._interpreter_problem(command) == "", command
+
+
+@pytest.mark.parametrize("shape", list(_FLAG_VALUES))
+def test_flag_value_check_rejects_the_pre_fix_rule(tmp_path, monkeypatch, shape):
+    """E-03 for rule 2, once per shape: with no token shielded, each is convicted again.
+
+    Split per shape rather than proven once, for the reason the stale-name checks next door are
+    also split: one mutation that reddens the parametrisation leaves the other two assertions
+    unwatched, and an assertion nobody has seen fail is decoration.
+    """
+    monkeypatch.chdir(tmp_path)
+    flag, value = _FLAG_VALUES[shape]
+    command = _wrapper_command(tmp_path, flag, value)
+    monkeypatch.setattr(gate_check, "_BARE_FLAG", NOTHING)  # nothing is ever a flag's value
+    problem = gate_check._interpreter_problem(command)
+    assert "hook script does not exist" in problem, (
+        f"the pre-fix rule flagged nothing for {shape!r}, so the case above proves nothing")
+    assert value in problem, problem
+
+
+def test_a_short_flags_value_may_still_be_the_script(tmp_path, monkeypatch):
+    """RULE 3, and the BOUNDARY of rule 2 — extending it to short flags reopens Finding A.
+
+    `python -u hook.py` is an ordinary hand-written config and `-u` takes no value, so the
+    token after it is the script and a missing one must still be named. Proving rule 2 without
+    this is proving the wrong thing: "no token after a flag is ever the script" satisfies every
+    assertion above while quietly un-checking the commonest shape there is.
+    """
+    import sys
+
+    monkeypatch.chdir(tmp_path)
+    problem = gate_check._interpreter_problem(f"{sys.executable} -u {BARE_MISSING}")
+    assert "hook script does not exist" in problem, problem
+    assert BARE_MISSING in problem, problem
+
+
+def test_short_flag_boundary_rejects_treating_every_flag_as_long(tmp_path, monkeypatch):
+    """E-03 for rule 3: widen rule 2 to every flag and the fail-open above comes straight back."""
+    import sys
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(gate_check, "_BARE_LONG_FLAG", re.compile(r"^-"))
+    assert gate_check._interpreter_problem(f"{sys.executable} -u {BARE_MISSING}") == "", (
+        "the mutation did not reproduce the over-broad rule, so the case above proves nothing")
 
 
 # --------------------------------------------------------------------------------------- #
