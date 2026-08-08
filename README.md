@@ -448,6 +448,7 @@ bash standup/control/tests/test_add_project.sh                          # /add-p
 bash standup/control/tests/test_remove_project.sh                       # /remove-project edits surgically and keeps your code
 bash standup/control/tests/test_supervisor_gate.sh                      # the gate still blocks product work and allows management
 bash standup/control/tests/test_release_invariants.sh                   # what ships is consistent with itself
+bash standup/control/tests/test_clock_independence.sh                   # the portal suite passes at every hour, not just convenient ones
 ```
 
 **Run `--self-test` before trusting a green** — it deliberately breaks the thing being judged and
@@ -461,7 +462,7 @@ renders the same payload through the pre-fix producer shape and requires the car
 both went stale the first time a judge was added, which is the same rot the paragraph below is
 about.)
 
-The last two are newer and worth saying what they are for. `test_supervisor_gate.sh` covers
+Three of them are newer and worth saying what they are for. `test_supervisor_gate.sh` covers
 `hooks/supervisor_gate.py` — the one mechanism separating "the EM supervises" from "the EM writes
 the product" — which had no test of any kind, while `verify_project.py` derives its deny list from
 that file's constants. `test_release_invariants.sh` judges the CONTENT of the release rather than
@@ -473,6 +474,13 @@ pruned — and no other judge could see either. Every case that judges the relea
 **committed** blob, never your working tree — customising your own install must never redden the
 shipped suite — and when there is no committed blob to read (a tarball install with no `.git`) the
 run says so in its summary rather than reporting a clean pass on a question it never asked.
+
+`test_clock_independence.sh` is the odd one out: it judges the SUITE rather than the product. The
+first command in that list reads the local wall clock, through `guard()`'s refusal to launch when a
+scheduled tick is minutes away — so it was red for four ten-minute windows a day, and a run at any
+other hour could not tell you that. This one replays it across the day under POSIX TZ strings. A
+suite that is red 40 minutes a day is worse than one that is red always: always-red gets fixed on
+the first run, and sometimes-red teaches a new reader that the failures are normal.
 
 Pass and failure counts are deliberately not printed here. A number copied into prose rots
 exactly the way a version number does; run the commands and read what they print.
