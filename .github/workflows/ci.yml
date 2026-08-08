@@ -85,11 +85,17 @@ jobs:
         # than its behaviour (a documented command that the command refuses; tracked teammate
         # definitions that /sync-roster would prune); both shipped broken in 0.5.0 with every
         # other judge green.
+        # The version judge is the same family and the same shape of hole: plugin.json,
+        # marketplace.json and the newest CHANGELOG heading all declare the release and NOTHING
+        # compared them, which is how a wrong version reached a commit message during 0.5.2 —
+        # caught by hand, before push, by luck. A published manifest cannot be un-served.
         run: |
           bash standup/control/tests/test_supervisor_gate.sh --self-test
           bash standup/control/tests/test_supervisor_gate.sh
           bash standup/control/tests/test_release_invariants.sh --self-test
           bash standup/control/tests/test_release_invariants.sh
+          bash standup/control/tests/test_version_consistency.sh --self-test
+          bash standup/control/tests/test_version_consistency.sh
 
       - name: Design judge self-test
         # DESIGN_RULEBOOK E-03: prove the judge FAILS on deliberately broken UI. A design gate
