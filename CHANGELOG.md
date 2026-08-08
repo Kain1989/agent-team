@@ -134,7 +134,7 @@ the command "runs the team on the bundled sample", two releases after the sample
 first paragraph a trial user reads, and the exact sentence whose question the deletion was meant to
 answer. Step 4 of the quick start now says plainly that a fresh checkout **stops** there, before it
 spawns an agent, and names `/add-project` as the fix. Three further stale references were swept out
-of the `/init` row and two skill files.
+of the `/init` row, a skill file and a governance hook.
 
 ### Added — what a run costs, and how far `/costs` actually reaches
 
