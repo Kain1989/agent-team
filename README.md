@@ -365,7 +365,7 @@ bash standup/control/tests/test_release_invariants.sh                   # what s
 ```
 
 **Run `--self-test` before trusting a green** — it deliberately breaks the thing being judged and
-requires the judge to go red. Three commands above do not take the flag, each for its own reason,
+requires the judge to go red. Some commands above do not take the flag, each for its own reason,
 and each carries the same proof by another route: the portal pytest suite has `*_rejects_*` tests
 that mutate what they check; `check_workflow_parse.js` takes a **filename** and would read
 `--self-test` as one, reporting a missing file as if the engine were broken; and
@@ -380,8 +380,10 @@ the product" — which had no test of any kind, while `verify_project.py` derive
 that file's constants. `test_release_invariants.sh` judges the CONTENT of the release rather than
 its behaviour: that no instructional document prints an `/add-project` invocation the command
 refuses, and that the `.claude/agents/*.md`, the roster and the portal's off-disk mock this repo
-**ships** are consistent with each other. Both of the first two shipped broken in 0.5.0 and no
-existing judge could see either. Every case that judges the release reads the **committed** blob,
+**ships** are consistent with each other. Two of those shipped broken in 0.5.0 — a documented
+`/add-project` the command refuses, and tracked teammate definitions `/sync-roster` would have
+pruned — and no other judge could see either. Every case that judges the release reads the
+**committed** blob,
 never your working tree — customising your own install must never redden the shipped suite — and
 when there is no committed blob to read (a tarball install with no `.git`) the run says so in its
 summary rather than reporting a clean pass on a question it never asked.
