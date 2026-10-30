@@ -1,0 +1,78 @@
+{
+  "_comment": "The eight phases, nine gates and four human gates. Paths are relative to the story directory. 'writes' = what the owning team may write; 'reads' = what its packet contains (MetaGPT-style subscriptions); 'withheld' = what its roles may never read.",
+  "phases": [
+    {
+      "id": "phase1-prd", "dir": "01-prd", "n": "1", "title": "PRD", "team": "product",
+      "writes": ["01-prd.md", "01-prd/**"],
+      "reads": [],
+      "withheld": [],
+      "gates": ["g1-prd"]
+    },
+    {
+      "id": "phase2-ux", "dir": "02-ux", "n": "2", "title": "UX", "team": "ux",
+      "writes": ["02-ux/**"],
+      "reads": ["01-prd.md"],
+      "withheld": [],
+      "gates": ["g2-ux"],
+      "skippable_for_kinds": ["cli", "lib", "service"]
+    },
+    {
+      "id": "phase3-dev", "dir": "03-dev", "n": "3", "title": "Dev", "team": "dev",
+      "writes": ["03-dev/**"],
+      "reads": ["01-prd.md", "02-ux/spec.md", "02-ux/decisions.md"],
+      "withheld": [],
+      "gates": ["g3-plan", "g3-impl"],
+      "worktree": true
+    },
+    {
+      "id": "phase4a-unit-integration", "dir": "04a-qa", "n": "4a", "title": "Unit+Int", "team": "qa",
+      "writes": ["04a-qa/**", "trace.json"],
+      "reads": ["01-prd.md", "03-dev/plan.md", "@diff"],
+      "withheld": [],
+      "gates": ["g4a-qa"]
+    },
+    {
+      "id": "phase4b-system-regression-perf", "dir": "04b-qa", "n": "4b", "title": "Sys+Reg+Perf", "team": "qa",
+      "writes": ["04b-qa/**"],
+      "reads": ["01-prd.md", "02-ux/spec.md", "@diff"],
+      "withheld": [],
+      "gates": ["g4b-qa"]
+    },
+    {
+      "id": "phase5-code-review", "dir": "05-review", "n": "5", "title": "Review", "team": "review",
+      "writes": [],
+      "reads": ["01-prd.md", "@diff", "trace.json", "04a-qa/report.md", "04b-qa/report.md"],
+      "withheld": ["03-dev/**", "02-ux/decisions.md", "01-prd/**", "02-ux/assignments.md", "log/**"],
+      "gates": ["g5-review"]
+    },
+    {
+      "id": "phase6-visual", "dir": "06-visual", "n": "6", "title": "Visual", "team": "visual",
+      "writes": ["06-visual/**"],
+      "reads": ["01-prd.md", "02-ux/spec.md"],
+      "withheld": ["03-dev/**"],
+      "gates": ["g6-visual"],
+      "skippable_for_kinds": ["cli", "lib", "service"]
+    },
+    {
+      "id": "phase7-deploy", "dir": "07-deploy", "n": "7", "title": "Deploy", "team": "devops",
+      "writes": ["07-deploy/**"],
+      "reads": ["01-prd.md", "@diff"],
+      "withheld": [],
+      "gates": ["g7-deploy"]
+    }
+  ],
+  "human_gates": [
+    { "id": "prd-signoff", "after_gate": "g1-prd", "reviews": "01-prd.md" },
+    { "id": "dev-plan-signoff", "after_gate": "g3-plan", "reviews": "03-dev/plan.md" },
+    { "id": "pre-merge", "after_gate": "g5-review", "reviews": "05-review/code-review.md" },
+    { "id": "deploy-beyond-dev", "after_gate": "g7-deploy", "reviews": "07-deploy/record.md" }
+  ],
+  "loops": [
+    { "from": "phase5-code-review", "to": "phase3-dev", "carries": "code defects" },
+    { "from": "phase5-code-review", "to": "phase4a-unit-integration", "carries": "test defects" },
+    { "from": "phase6-visual", "to": "phase3-dev", "carries": "visual defects" }
+  ],
+  "round_caps": { "phase2-ux": 3, "phase3-dev": 3, "phase5-code-review": 2, "phase6-visual": 2 },
+  "story_kinds": ["web", "cli", "lib", "service"],
+  "review_lenses": ["Correctness", "Spec compliance", "Security"]
+}

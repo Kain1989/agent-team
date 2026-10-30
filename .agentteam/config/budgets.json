@@ -1,0 +1,13 @@
+{
+  "_comment": "Per-phase ceilings. usage_hook.py records agents + tokens per phase from SubagentStop events; a breach fails that phase's gate. Round caps live in pipeline.json.",
+  "phases": {
+    "phase1-prd":                     { "agents": 20, "tokens": 400000 },
+    "phase2-ux":                      { "agents": 24, "tokens": 250000 },
+    "phase3-dev":                     { "agents": 14, "tokens": 600000 },
+    "phase4a-unit-integration":       { "agents": 10, "tokens": 400000 },
+    "phase4b-system-regression-perf": { "agents": 12, "tokens": 450000 },
+    "phase5-code-review":             { "agents": 10, "tokens": 350000 },
+    "phase6-visual":                  { "agents": 8,  "tokens": 300000 },
+    "phase7-deploy":                  { "agents": 6,  "tokens": 200000 }
+  }
+}

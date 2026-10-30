@@ -2,112 +2,34 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, v2]
   pull_request:
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
+  selftest:
+    # Windows is in the matrix on purpose: v1 parsed Windows paths with POSIX shlex and refused
+    # every job there, and CI (ubuntu only) never saw it.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.9", "3.12"]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-
-      - name: Install portal deps
-        run: python -m pip install --upgrade pip && pip install -r standup/portal/requirements.txt
-
-      - name: Portal test suite
-        # The suite mocks every `claude -p` call (no CLI needed in CI) and uses isolated
-        # temp STANDUP_ROOTs, so it runs hermetically.
-        working-directory: standup/portal
-        run: python -m pytest -q
-
-      - name: Clock-independence judge
-        # The step above runs the portal suite ONCE, at whatever time the runner happens to start.
-        # tests/test_actions.py was red for ~40 min a day because guard()'s tick_imminent rule reads
-        # the real wall clock and the fixture never pinned it — a defect a single-clock run can only
-        # catch by luck, and CI's luck held for months. This replays that suite across the day under
-        # POSIX TZ strings. --self-test first: it removes the fixture's pin and requires the window
-        # cases to go red while the ordinary-clock cases stay green.
+          python-version: ${{ matrix.python }}
+      - name: Install the hooks (bakes this runner's interpreter, smoke-runs the guard)
+        run: python .agentteam/bin/setup.py
+      - name: Agent files and ARCHITECTURE.md are generated, not hand-edited
         run: |
-          bash standup/control/tests/test_clock_independence.sh --self-test
-          bash standup/control/tests/test_clock_independence.sh
-
-      - name: Frontend contract test
-        # The ONLY test that EXECUTES static/app.js. It ran green for its whole life while
-        # being referenced by nothing but its own header — not this file, not the README —
-        # so the three source-TEXT judges added around it in tests/test_static_mock.py were
-        # the only thing aimed at app.js, and the harness that actually renders it was
-        # aimed at nothing. Node stdlib only (fs/path/vm): no npm install, no jsdom, no
-        # package.json, and the runner image already ships node (the two steps below have
-        # always relied on that). Its E-03 proof is in-band, not a flag — section 8 renders
-        # the same payload through the pre-fix producer shape and requires it to break.
-        run: node standup/portal/tests/contract.frontend.test.js
-
-      - name: Workflow parse check
-        # `node --check` PASSES on an unescaped backtick that truncates a prompt template, so it
-        # cannot catch the failure where the engine refuses to load the workflow. This can.
-        run: node standup/control/check_workflow_parse.js standup/standup.workflow.js
-
-      - name: SDLC routing judge
-        # Loads the REAL engine and executes it — both entry paths must still reach INTAKE, and a
-        # mis-routed task must still stop rather than run the pipeline against the wrong repo.
-        # README has listed this under Tests since it was written; CI never ran it, so the one
-        # judge covering "the machine is aimed at the wrong thing" was itself unenforced.
-        # --self-test first, like every other judge that has one: this was the one whose teeth CI never checked.
+          python .agentteam/bin/roster.py --check
+          python .agentteam/bin/architecture.py --check
+      - name: Selftest — every check must be shown to fail (E-03)
+        run: python .agentteam/bin/selftest.py
+      - name: Design judge self-test (phase 6)
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
         run: |
-          node standup/control/tests/test_sdlc_routing.js --self-test
-          node standup/control/tests/test_sdlc_routing.js
-
-      - name: Onboarding judges
-        # The paths a NEW user walks: the eval gold-set's RUN/SKIP resolution, arming the
-        # exemption in THIS install, and adding/removing a project.
-        # Each runs its own --self-test first, because a judge that has never been shown to fail is
-        # not a judge (E-03). Several of these caught a real defect in their own logic the first
-        # time they were pointed at the tree; the two project judges had theirs found in review
-        # instead, which is recorded as a known gap in CHANGELOG 0.4.0.
-        # test_run_flag_clear.sh is arm_path's other half: the exemption also has to be GIVEN BACK.
-        # `clear` refused whenever any other run held a record and had no per-record delete, so in
-        # any tree that had seen two overlapping runs it could never succeed again and --force —
-        # which unlinks the flag under whatever is still running — was the only way out. Its
-        # --self-test runs a pinned PRE-FIX copy of `clear` and requires the cases to reproduce that.
-        run: |
-          bash standup/control/tests/test_eval_resolver.sh --self-test
-          bash standup/control/tests/test_eval_resolver.sh
-          bash standup/control/tests/test_arm_path.sh --self-test
-          bash standup/control/tests/test_arm_path.sh
-          bash standup/control/tests/test_run_flag_clear.sh --self-test
-          bash standup/control/tests/test_run_flag_clear.sh
-          bash standup/control/tests/test_add_project.sh --self-test
-          bash standup/control/tests/test_add_project.sh
-          bash standup/control/tests/test_remove_project.sh --self-test
-          bash standup/control/tests/test_remove_project.sh
-
-      - name: Governance + release judges
-        # The supervisor gate had NO test of any kind while verify_project.py derives its
-        # management deny list from that same file's constants — a change there silently changed
-        # what /add-project refuses. The release judge covers the CONTENT of the release rather
-        # than its behaviour (a documented command that the command refuses; tracked teammate
-        # definitions that /sync-roster would prune); both shipped broken in 0.5.0 with every
-        # other judge green.
-        # The version judge is the same family and the same shape of hole: plugin.json,
-        # marketplace.json and the newest CHANGELOG heading all declare the release and NOTHING
-        # compared them, which is how a wrong version reached a commit message during 0.5.2 —
-        # caught by hand, before push, by luck. A published manifest cannot be un-served.
-        run: |
-          bash standup/control/tests/test_supervisor_gate.sh --self-test
-          bash standup/control/tests/test_supervisor_gate.sh
-          bash standup/control/tests/test_release_invariants.sh --self-test
-          bash standup/control/tests/test_release_invariants.sh
-          bash standup/control/tests/test_version_consistency.sh --self-test
-          bash standup/control/tests/test_version_consistency.sh
-
-      - name: Design judge self-test
-        # DESIGN_RULEBOOK E-03: prove the judge FAILS on deliberately broken UI. A design gate
-        # that has never been shown to fail is not a gate — every verdict it gives is unreliable.
-        run: |
-          npm install --no-save playwright
-          npx playwright install --with-deps chromium
-          node standup/control/verify_design_quality.js --self-test
+          npm i --no-save playwright@1.48.2 && npx playwright install --with-deps chromium
+          node .agentteam/bin/visual/verify_design_quality.js --self-test

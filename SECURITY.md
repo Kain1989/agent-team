@@ -1,44 +1,32 @@
 # Security
 
-## What the plugin runs
+## What the harness defends against
 
-The `agent-team` plugin orchestrates an AI engineering team locally. Be aware it:
-- spawns headless `claude -p` subprocesses to do work (read-only jobs + code tasks);
-- runs a local **FastAPI portal bound to `127.0.0.1` only** (never a public interface);
-- creates **isolated git worktrees** of a target repo for code tasks;
-- reads/writes only within the team project + the target repos you configure.
+Agents that are trying to finish, not attackers: a dev agent that edits the test instead of the code,
+a reviewer that reads the author's reasoning and agrees with it, a run that pushes to `main`, deploys to
+production or leaks `.env` into a commit. All of these have been observed in coding agents (see the
+references in [DESIGN.md](DESIGN.md)).
 
-## Trust boundaries / the gate
+## Layers, and what each one does NOT guarantee
 
-A code-task agent runs under four independent, belt-and-suspenders layers (see
-`standup/portal/parsers/agent_run.py` + `standup/control/job_code_gate_hook.py`):
-1. **allow-list** — read + worktree-scoped edit only (no Bash, sub-agents, WebFetch, or MCP);
-2. **`--permission-mode default`** (not bypass);
-3. a **deny-by-default PreToolUse hook** confining every read AND write to the job's worktree;
-4. **empty MCP config + a credential-stripped child env** — no Snowflake/Slack/etc. handle
-   exists in the job, and `*KEY*/*TOKEN*/*SECRET*` vars are stripped.
+| Layer | Guarantees | Does not guarantee |
+|---|---|---|
+| `guard.py` (hard) | the listed tool calls never run; readonly roles cannot run anything off their allow-list; path tools respect write roots and withheld reads | **code-executing roles** (dev, qa, visual, devops) run tests — that is arbitrary code, and `python -c` can write anywhere the OS lets it. For those roles the Bash rules are best-effort pattern checks, backed by the audited layer |
+| `gate.py` (audited) | a phase advances only when its artifacts, runs and records pass every check | that an artifact is *good* — only that it is complete, consistent and evidenced |
+| human gates | four decisions are recorded as made by a person, from an interactive terminal | that the person is who `--by` says, or that a determined user with a shell didn't forge a record |
 
-On top of that:
-- **Human approval gate** — a code task parks at `awaiting_approval` with a diff; the trusted
-  worker commits ONLY after a human approves. Nothing is ever pushed or merged.
-- **Output guardrail** — the produced diff is scanned for apparent secrets BEFORE it reaches
-  the approval queue; a leak fails the job instead of being queued for a click-through.
-- **Budget cap + kill switch** — enforced in the trusted worker (outside the agent), so a
-  runaway run cannot exceed its own limit.
-- **Separation of duties** (opt-in) — the approver can be required to differ from the creator.
+## Fail-open, audited
+If `guard.py` itself crashes it allows the call (a guard bug must not brick a session), writes the
+error to `.agentteam/state/audit/guard-errors.jsonl`, and **every gate fails** while an error is
+recorded inside its phase. `setup.py` and `selftest.py` smoke-run the configured hook command; Claude Code
+does not fail closed on a hook it cannot execute, so a moved interpreter would otherwise remove the
+boundary silently. Re-run `setup.py` after any Python reinstall.
 
-## No secrets in the repo
+## Identity
+Roles come from the PreToolUse `agent_type` field. A Claude Code build that does not send it makes every
+subagent look like the main session (no product writes) — work fails safe, it doesn't widen. An
+unrecognised `agent_type` gets the `unknown` role: readonly, no write roots.
 
-The repo tracks source only — `.venv/`, `control/jobs.db`, `.env`, generated gate configs,
-and each project's local bare origin are gitignored. Do not commit credentials; the portal needs none.
-
-## Platform support
-
-macOS and Linux. Requires **bash**, **Python 3.9+**, **git**, and the **`claude` CLI** on
-`PATH`. `/standup` uses the Claude Code **Workflow tool** (with a Task-tool fallback). Windows
-is not currently supported (the `setup.sh` installer + the portal launcher are POSIX shell).
-
-## Reporting a vulnerability
-
-Open a private security advisory on the GitHub repo, or contact the maintainer
-(https://github.com/Kain1989). Please do not open a public issue for a vulnerability.
+## Reporting
+Open a GitHub issue for harness bugs. For a bypass of `guard.py` or a way to make a gate pass on a broken
+story, please open a private security advisory on the repository instead.

@@ -1,0 +1,76 @@
+{
+  "_comment": "What guard.py enforces. Regexes are Python 're', matched case-insensitively against the whitespace-normalised Bash command unless noted. Paths are globs relative to the repo root, '/' separated.",
+  "default_branches": ["main", "master", "trunk", "develop"],
+
+  "sensitive_paths": [
+    "**/.env", "**/.env.*", "**/*.pem", "**/*.key", "**/id_rsa*", "**/id_ed25519*", "**/id_ecdsa*",
+    "**/.ssh/**", "**/.aws/credentials", "**/.netrc", "**/.npmrc", "**/.pypirc", "**/credentials.json"
+  ],
+  "sensitive_path_exceptions": ["**/.env.example", "**/.env.sample", "**/.env.template"],
+
+  "harness_paths": [".agentteam/bin/**", ".agentteam/config/**", ".claude/settings.json", ".claude/settings.local.json", "hooks/**", ".claude/agents/**", ".claude/skills/**", "CLAUDE.md", "tests/**", ".github/**"],
+  "audit_paths": [".agentteam/state/audit/**", ".agentteam/stories/*/human/**", ".agentteam/stories/*/runs/**", ".agentteam/stories/*/usage.jsonl", ".agentteam/stories/*/state.json", ".agentteam/stories/*/findings.jsonl", ".agentteam/stories/*/packets/**"],
+
+  "test_globs": ["**/tests/**", "**/test/**", "**/__tests__/**", "**/test_*.py", "**/*_test.py", "**/*_test.go", "**/*.test.*", "**/*.spec.*", "**/__snapshots__/**", "**/*.snap", "**/golden/**", "**/testdata/**", "**/conftest.py"],
+  "protected_from_dev": ["**/tests/acceptance/**", "**/test/acceptance/**", "**/__snapshots__/**", "**/golden/**"],
+
+  "hard_deny_bash": [
+    { "id": "force-push",            "re": "\\bgit\\s+push\\b[^|;&]*(\\s--force(-with-lease)?\\b|\\s-[a-z]*f[a-z]*\\b|\\s\\+[\\w/.:-]+)" },
+    { "id": "push-default-branch",   "re": "\\bgit\\s+push\\b[^|;&]*\\s(\\S+:)?(refs/heads/)?{default}(\\s|$)" },
+    { "id": "delete-remote-branch",  "re": "\\bgit\\s+push\\b[^|;&]*(\\s--delete\\b|\\s-d\\b|\\s:[\\w/.-]+)" },
+    { "id": "merge-pr",              "re": "\\bgh\\s+pr\\s+merge\\b|\\bgh\\s+api\\b[^|;&]*/merges?\\b" },
+    { "id": "hook-bypass",           "re": "--no-verify\\b|\\bcore\\.hooksPath\\b|\\bHUSKY=0\\b|\\bSKIP=\\S|\\bgit\\s+commit\\b[^|;&]*\\s-[a-z]*n[a-z]*\\b" },
+    { "id": "destructive-rm",        "re": "\\brm\\s+(-[a-z]*\\s+)*-[a-z]*[rf][a-z]*\\s+(-[a-z]*\\s+)*[\"']?(/\\*?(\\s|$)|~/?\\*?(\\s|$)|\\$HOME/?\\*?(\\s|$)|\\.\\.?/?\\*?(\\s|$)|\\.\\./|\\*(\\s|$))" },
+    { "id": "destructive-git",       "re": "\\bgit\\s+(reset\\s+--hard|clean\\s+-[a-z]*f[a-z]*|checkout\\s+--\\s+\\.|branch\\s+-D|update-ref\\s+-d|filter-branch|reflog\\s+expire)\\b" },
+    { "id": "pipe-to-shell",         "re": "\\b(curl|wget)\\b[^|]*\\|\\s*(sudo\\s+)?(ba|z|da)?sh\\b" },
+    { "id": "disk-destroy",          "re": "\\b(mkfs(\\.\\w+)?|dd\\s+if=|shred)\\b|chmod\\s+-R\\s+777" },
+    { "id": "git-internals-write",   "re": "(>|\\btee\\b|\\bcp\\b|\\bmv\\b|\\bsed\\s+-i)[^|;&]*\\.git/(hooks|config|HEAD|refs|objects)" }
+  ],
+
+  "deploy": {
+    "_comment": "A command matching any pattern is a deploy. Group 'env' names the target. Targets in 'free_envs' need no human gate; any other target needs an approved deploy-beyond-dev on the active story.",
+    "patterns": [
+      "\\bdeploy\\b[^|;&]*--(env|environment|target)[= ](?P<env>[\\w-]+)",
+      "\\b(kubectl|helm)\\b[^|;&]*--(context|kube-context)[= ](?P<env>[\\w-]+)",
+      "\\b(terraform|tofu)\\s+apply\\b[^|;&]*-var(-file)?[= ][^|;&]*?(?P<env>prod|production|staging|stage)\\b",
+      "\\bvercel\\b[^|;&]*(?P<env>--prod)\\b",
+      "\\bfly\\s+deploy\\b[^|;&]*--app[= ](?P<env>[\\w-]+)"
+    ],
+    "free_envs": ["dev", "development", "local"]
+  },
+
+  "bash_profiles": {
+    "readonly": {
+      "_comment": "Allow-list. Every segment of a compound command must match. No redirection, substitution or tee.",
+      "allow_commands": ["ls", "cat", "head", "tail", "wc", "grep", "rg", "find", "sort", "uniq", "diff", "stat", "file", "tree", "pwd", "echo", "which", "basename", "dirname", "realpath", "cut", "tr", "sed", "awk", "jq"],
+      "git_subcommands": ["status", "log", "diff", "show", "blame", "rev-parse", "ls-files", "ls-tree", "branch", "grep", "describe", "merge-base", "shortlog", "cat-file"],
+      "deny_args": { "find": ["-delete", "-exec", "-execdir", "-fprint", "-fprintf", "-ok"], "sed": ["-i", "--in-place"], "awk": ["system(", "print >"], "branch": ["-d", "-D", "-m", "-M", "-c", "-C", "--delete", "--move", "--copy", "-f", "--force"] },
+      "story_subcommands": ["status", "board", "show", "trace-show"]
+    },
+    "readonly-git-comment": {
+      "extends": "readonly",
+      "allow_patterns": ["^gh\\s+pr\\s+(view|diff|checks|comment)\\b", "^gh\\s+pr\\s+review\\b(?![^|;&]*--approve)"],
+      "story_subcommands": ["status", "board", "show", "trace-show", "finding", "verdict", "escalate", "resolve"]
+    },
+    "dev": {
+      "_comment": "Deny-list: anything not hard-denied, not touching sensitive or harness paths, not a non-dev deploy.",
+      "story_subcommands": ["status", "board", "show", "trace-show", "run", "trace", "finding", "verdict", "escalate", "resolve"],
+      "deny_deploy": true
+    },
+    "devops": {
+      "extends": "dev",
+      "story_subcommands": ["status", "board", "show", "trace-show", "run", "finding", "verdict", "escalate", "resolve"],
+      "deny_deploy": false
+    },
+    "supervisor": {
+      "_comment": "The main session. Drives the state machine; produces no product code (repo/worktree writes are denied by write roots, not by this profile).",
+      "extends": "dev",
+      "story_subcommands": ["new", "status", "board", "show", "trace-show", "start", "gate", "reopen", "skip", "packet", "escalate", "resolve", "run", "worktree", "verdict"],
+      "deny_deploy": true
+    }
+  },
+
+  "story_subcommands_never_for_agents": ["human-gate", "usage", "waive"],
+
+  "supervisor_write_roots": ["*.md", "docs/**", ".agentteam/stories/*/assignments/**", ".agentteam/state/scratch/**", "workspace/*/constitution.md"]
+}

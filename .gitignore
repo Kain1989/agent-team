@@ -1,49 +1,14 @@
-# venv / python caches
-standup/.venv/
+# runtime state: env report, audit logs, active story, maintainer flag
+.agentteam/state/
+# stories are the record of work on YOUR projects, not part of the harness
+.agentteam/stories/
+# your project repos and their worktrees
+workspace/
+# machine-specific hook wiring (absolute interpreter paths), written by setup.py
+.claude/settings.local.json
+
 __pycache__/
-*.py[cod]
-.pytest_cache/
-
-# generated at install by setup.sh (from the *.json.template files)
-standup/control/job_code_gate.json
-standup/control/job_readonly_gate.json
-
-# machine-local runtime state (the control plane writes these)
-standup/control/jobs.db
-standup/control/*.db
-standup/control/jobs.db-*
-standup/control/heartbeat.json
-standup/control/run.lock
-standup/control/team_run_active
-standup/control/control.log
-standup/control/runs/
-standup/control/requests/
-standup/control/results/
-standup/control/worktrees/
-standup/log/*.md
-
-# per-dev progress files are never committed
-.standup/
-
-# Local bare origins. /add-project creates one per project that arrives without a remote
-# (`.<name>-origin.git`), so this must be a PATTERN — a hardcoded line covered only the
-# bundled sample, and an unignored bare origin pulls the project's git objects, secrets
-# included, into this installation's own history on the next `git add -A`.
-.*-origin.git/
-
-# env / secrets
-.env
-*.pem
-*.key
-*.p8
-
-# OS cruft
+*.pyc
+*.tmp
+node_modules/
 .DS_Store
-
-# Claude Code session/launch artifacts (machine-local, not MVP source)
-.claude/launch.json
-.claude/launch.json.tmp
-.claude/*.local.json
-
-# session notes (auto-distilled working notes; not part of the plugin)
-SESSION_NOTES.md

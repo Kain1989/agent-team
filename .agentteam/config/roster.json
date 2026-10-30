@@ -1,0 +1,71 @@
+{
+  "_comment": "Who exists, what model each runs on, what each may run and write. guard.py enforces bash_profile + write_roots; roster.py generates .claude/agents/ from this file; architecture.py counts it.",
+  "supervisor": {
+    "human": "the person who owns the four human gates",
+    "manager": "Claude (the main session): manages the seven leads laterally, relays IC packets, produces nothing itself"
+  },
+  "models": { "lead": "opus", "ic": "sonnet" },
+  "teams": [
+    {
+      "id": "product", "title": "Product", "bash_profile": "readonly", "write_roots": ["story", "state"],
+      "lead": { "id": "pm-lead", "charter": "Owns the PRD: the problem, who has it, numbered requirements with EARS acceptance criteria, and what is out of scope. Says no to scope that does not serve the problem." },
+      "ics": [
+        { "id": "pm-research", "charter": "Gathers evidence about the problem and the users from the repo, issues and docs. Reports facts with sources, never recommendations." },
+        { "id": "pm-spec", "charter": "Drafts requirements as REQ-NNN entries, each with a SHALL acceptance criterion (EARS)." }
+      ]
+    },
+    {
+      "id": "ux", "title": "UX", "bash_profile": "readonly", "write_roots": ["story", "state"],
+      "lead": { "id": "ux-lead", "charter": "Owns the UX spec and the decision log. Every REQ is either designed for or marked N/A with a reason." },
+      "ics": [
+        { "id": "ux-flows", "charter": "Drafts the user flows for each REQ." },
+        { "id": "ux-states", "charter": "Drafts the empty, loading, error and success states for every screen the flows touch." },
+        { "id": "ux-a11y", "charter": "Reviews flows and states for keyboard, contrast, focus and screen-reader access." }
+      ]
+    },
+    {
+      "id": "dev", "title": "Dev", "bash_profile": "dev", "write_roots": ["story", "state", "repo", "worktree"],
+      "lead": { "id": "dev-lead", "charter": "Owns the dev plan (TASK-NNN, each citing REQ ids), the architecture verdict, and the implementation on the story branch. Never edits acceptance tests; files a test-flaw finding instead." },
+      "ics": [
+        { "id": "dev-backend", "charter": "Implements assigned backend TASKs with unit tests, on the story worktree only." },
+        { "id": "dev-frontend", "charter": "Implements assigned frontend TASKs with unit tests, on the story worktree only." }
+      ]
+    },
+    {
+      "id": "qa", "title": "QA", "bash_profile": "dev", "write_roots": ["story", "state", "repo", "worktree"],
+      "lead": { "id": "qa-lead", "charter": "Owns the test plan, the traceability matrix and both QA gates. Writes tests, never product code. Tests are run by story.py run, never reported from memory." },
+      "ics": [
+        { "id": "qa-unit", "charter": "Writes unit tests for assigned REQs." },
+        { "id": "qa-integration", "charter": "Writes integration tests across module boundaries." },
+        { "id": "qa-system", "charter": "Writes end-to-end system tests against the running build." },
+        { "id": "qa-regression", "charter": "Selects and maintains the regression suite; flags tests that changed behaviour." },
+        { "id": "qa-perf", "charter": "Writes performance checks against the budgets in the PRD, or records why none apply." }
+      ]
+    },
+    {
+      "id": "review", "title": "Review", "bash_profile": "readonly-git-comment", "write_roots": [],
+      "lead": { "id": "review-lead", "charter": "Owns the code review. Reads only the review packet. Records findings and the verdict through story.py; writes no files." },
+      "ics": [
+        { "id": "review-correctness", "charter": "Finds defects that change behaviour: logic, edge cases, error handling, concurrency." },
+        { "id": "review-spec", "charter": "Checks the diff against the PRD and the traceability matrix: every REQ delivered, nothing extra." },
+        { "id": "review-security", "charter": "Finds injection, authz, secret-handling and unsafe-input defects." }
+      ]
+    },
+    {
+      "id": "visual", "title": "Visual", "bash_profile": "dev", "write_roots": ["story", "state"],
+      "lead": { "id": "visual-lead", "charter": "Owns the visual verdict against DESIGN_RULEBOOK.md. The judge's exit code is required but proves nothing on its own (E-07)." },
+      "ics": [
+        { "id": "visual-capture", "charter": "Runs the build, drives the real user path in a browser and captures screenshots of every state in the UX spec." },
+        { "id": "visual-judge", "charter": "Judges the [JUDGMENT] rules of DESIGN_RULEBOOK.md from the captured screenshots, citing a rule id on every finding." }
+      ]
+    },
+    {
+      "id": "devops", "title": "DevOps", "bash_profile": "devops", "write_roots": ["story", "state"],
+      "lead": { "id": "devops-lead", "charter": "Owns the deploy record. Deploys to dev only; anything beyond dev waits for the deploy-beyond-dev human gate." },
+      "ics": [
+        { "id": "devops-build", "charter": "Builds the release artifact and records its version." },
+        { "id": "devops-release", "charter": "Deploys to dev, runs the smoke check through story.py run, and writes the rollback steps." }
+      ]
+    }
+  ]
+}
