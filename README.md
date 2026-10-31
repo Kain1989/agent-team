@@ -18,6 +18,7 @@ Supervisor (you) ── four human gates
 - [ARCHITECTURE.md](ARCHITECTURE.md) — teams, privileges, pipeline, every check, budgets (generated from the live config)
 - [DESIGN.md](DESIGN.md) — why: what was kept from v1, what the sources disagreed on, which outside ideas were adopted
 - [SECURITY.md](SECURITY.md) — what each layer guarantees and what it does not
+- [V2-VS-V1.md](V2-VS-V1.md) — what v2 improves over v1, what it kept, and where the v1 archive lives
 
 ## Quick start
 
@@ -62,13 +63,28 @@ python .agentteam/bin/story.py human-gate STORY-001 prd-signoff approve --by "Yo
 
 ## Coming from v1 (≤ 0.5.2)
 
-v2 is a rebuild, not an upgrade: the unit of work is a story rather than a board tick, roles are
-lead + ICs rather than pairs, and gates are deterministic checks rather than model verdicts. The
-Mission Control portal is not in v2.0 (story state is plain files; see DESIGN.md's roadmap).
+v2 is a rebuild, not an upgrade. Three things changed:
 
-v1 stays available: its final state is tagged **`v1-final`** in this repository and is archived as its
-own repository (**`Kain1989/agent-team-v1`**). If you installed v1 as a Claude Code plugin, pin it to that
-repository — v2 is a project you clone and run `setup.py` in, not a marketplace plugin.
+- **Unit of work:** a story rather than a board tick.
+- **Roles:** a lead with ICs rather than developer pairs.
+- **Gates:** deterministic checks rather than model verdicts.
+
+**[V2-VS-V1.md](V2-VS-V1.md)** lists what improved, what was kept, and what you give up for now: the
+Mission Control portal, recurring standups and plugin install.
+
+v1 is frozen, not gone. It lives in the archive repository
+**[Kain1989/agent-team-v1](https://github.com/Kain1989/agent-team-v1)** and under the
+[`v1-final`](https://github.com/Kain1989/agent-team/tree/v1-final) tag here. Useful starting points:
+
+- [the v1 README](https://github.com/Kain1989/agent-team-v1/blob/v1-final/README.md)
+- [the Mission Control portal](https://github.com/Kain1989/agent-team-v1/blob/v1-final/standup/portal/README.md)
+- [the v1 ARCHITECTURE](https://github.com/Kain1989/agent-team-v1/blob/v1-final/ARCHITECTURE.md)
+
+If you installed v1 as a Claude Code plugin, re-point it to the archive:
+
+```
+/plugin marketplace add Kain1989/agent-team-v1
+```
 
 ## Layout
 

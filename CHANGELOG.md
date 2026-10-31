@@ -2,11 +2,13 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/). This project adheres to
 [Semantic Versioning](https://semver.org/). The v1 history (0.1.0 – 0.5.2) is in the `v1-final` tag and
-the `Kain1989/agent-team-v1` archive.
+the [Kain1989/agent-team-v1](https://github.com/Kain1989/agent-team-v1) archive
+([v1 CHANGELOG](https://github.com/Kain1989/agent-team-v1/blob/v1-final/CHANGELOG.md)).
 
 ## [2.0.0] — 2026-10-30
 
-A rebuild. The version jumps from 0.5.2 to 2.0.0 so that "v2" means one thing everywhere.
+A rebuild. The version jumps from 0.5.2 to 2.0.0 so that "v2" means one thing everywhere. For a
+side-by-side comparison with v1, see [V2-VS-V1.md](V2-VS-V1.md).
 
 ### Changed — everything that defines the product
 - **Unit of work:** a *story* moving through eight phases (PRD, UX, Dev, Unit+Int, Sys+Reg+Perf, Review,

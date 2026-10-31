@@ -4,8 +4,9 @@ This is the merged design: the **Agent Team Harness** architecture (seven teams,
 gates, four human stops), plus what **agent-team v1** (≤ 0.5.2) proved in production, plus the ideas
 from comparable systems that held up. Where they disagree, this file says which one won and why.
 
-v1 is archived, not deleted: its last state is tag `v1-final` on this repository (see the migration
-section of [README.md](README.md)).
+v1 is archived, not deleted. Its last state is tag `v1-final` in this repository and the
+[Kain1989/agent-team-v1](https://github.com/Kain1989/agent-team-v1) archive. The user-facing comparison is
+in [V2-VS-V1.md](V2-VS-V1.md).
 
 ## Why a rebuild, not a refactor
 
