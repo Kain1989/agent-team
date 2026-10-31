@@ -318,7 +318,7 @@ def check_bash(ev: Dict[str, Any], role: Dict[str, Any]) -> Decision:
 
     # 5. writes aimed at harness or audit paths (best effort for code-executing profiles)
     if WRITE_VERBS.search(norm) and not (role["kind"] == "supervisor" and maintainer_mode()):
-        if re.search(r"\.agentteam[/\\](bin|config|state[/\\]audit)|[/\\]human[/\\]|[/\\]runs[/\\]|state\.json|usage\.jsonl|findings\.jsonl|\.claude[/\\](settings|agents)", norm):
+        if re.search(r"\.agentteam[/\\](bin|config|state[/\\]audit)|stories[/\\][^/\\\s]+[/\\](human|runs)[/\\]|state\.json|usage\.jsonl|findings\.jsonl|\.claude[/\\](settings|agents)", norm):
             return deny("harness-write", "the command would modify harness code, config or an audit record")
 
     # 6. deploys

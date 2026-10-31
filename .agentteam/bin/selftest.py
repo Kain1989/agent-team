@@ -140,6 +140,10 @@ def section_guard() -> None:
             ("usage_hook by agent", B("python .agentteam/bin/usage_hook.py", "dev-backend"), D),
             ("sed -i harness", B("sed -i s/x/y/ .agentteam/bin/gate.py", "dev-backend"), D),
             ("rm state.json", B(f"rm .agentteam/stories/{sid}/state.json", "dev-lead"), D),
+            ("forge a run record", B(f"cp pass.json .agentteam/stories/{sid}/runs/unit-01.json", "qa-unit"), D),
+            ("forge a human record", B(f"python -c 'open(\".agentteam/stories/{sid}/human/pre-merge.json\",\"w\")'", "dev-lead"), D),
+            # a `/runs/` or `/human/` that is not a story's record dir is not an audit write
+            ("CI API url with /runs/", B("curl -s https://api.github.com/repos/o/r/actions/runs/1 | python -c 'import sys'"), A),
             # --- readonly profiles are allow-lists
             ("pm ls+git log", B("ls -la && git log --oneline -5 | head", "pm-lead"), A),
             ("pm story status", B(f"python .agentteam/bin/story.py status {sid}", "pm-research"), A),

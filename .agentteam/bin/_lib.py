@@ -84,7 +84,9 @@ def write_text(p: Path, text: str) -> None:
     p = Path(p)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_name(p.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8", newline="\n")
+    # Path.write_text has no `newline` before 3.10; open() has it on every supported version.
+    with tmp.open("w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
     # Windows: a file git or an antivirus scanner just touched can refuse a replace for a few
     # milliseconds (WinError 5). Retry briefly instead of failing a gate on a transient lock.
     for attempt in range(20):
